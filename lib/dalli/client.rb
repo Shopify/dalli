@@ -345,6 +345,12 @@ module Dalli
       yield self
     end
 
+    def pipelined
+      pipeline = Pipeline.new(ring, @key_manager, @options)
+      yield pipeline
+      pipeline.execute
+    end
+
     private
 
     def check_positive!(amt)
@@ -357,16 +363,6 @@ module Dalli
 
       newvalue = yield(value)
       perform(:set, key, newvalue, ttl_or_default(ttl), cas, req_options)
-    end
-
-    ##
-    # Uses the argument TTL or the client-wide default.  Ensures
-    # that the value is an integer
-    ##
-    def ttl_or_default(ttl)
-      (ttl || @options[:expires_in]).to_i
-    rescue NoMethodError
-      raise ArgumentError, "Cannot convert ttl (#{ttl}) to an integer"
     end
 
     def ring
@@ -393,15 +389,15 @@ module Dalli
     # operational times out.
     ##
     def perform(*all_args)
-      return yield if block_given?
-
       op, key, *args = all_args
 
       key = key.to_s
       key = @key_manager.validate_key(key)
 
       server = ring.server_for_key(key)
-      server.request(op, key, *args)
+      response = server.request(op, key, *args)
+      response = yield(response) if block_given?
+      response
     rescue NetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying request with new server' }

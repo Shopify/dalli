@@ -26,8 +26,19 @@ module Dalli
     #
     # Returns true if key exists, otherwise nil.
     def touch(key, ttl = nil)
-      resp = perform(:touch, key, ttl_or_default(ttl))
-      resp.nil? ? nil : true
+      perform(:touch, key, ttl_or_default(ttl)) do |resp|
+        resp.nil? ? nil : true
+      end
+    end
+
+    ##
+    # Uses the argument TTL or the client-wide default.  Ensures
+    # that the value is an integer
+    ##
+    def ttl_or_default(ttl)
+      (ttl || @options[:expires_in]).to_i
+    rescue NoMethodError
+      raise ArgumentError, "Cannot convert ttl (#{ttl}) to an integer"
     end
   end
 end
