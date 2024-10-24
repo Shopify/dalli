@@ -14,6 +14,7 @@ group :development, :test do
   gem 'rubocop-performance'
   gem 'rubocop-rake'
   gem 'simplecov'
+  gem 'stackprof', platform: :mri
 end
 
 group :test do
