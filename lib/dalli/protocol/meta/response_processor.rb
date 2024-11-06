@@ -230,6 +230,7 @@ module Dalli
           bitflags_token[1..]
         end
 
+        # Spending lots of time in chomp! method
         def read_line
           @io_source.read_line&.chomp!(TERMINATOR)
         end

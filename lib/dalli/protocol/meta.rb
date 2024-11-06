@@ -61,10 +61,13 @@ module Dalli
         # read all the memcached responses back and build a hash of key value pairs
         results = {}
         while (line = @connection_manager.readline.chomp) != ''
+          # Get as much data from the readline as possible then chomp/extract the values from that buffer in memory rather than the socket
           break if line.start_with?('MN')
           next unless line.start_with?('VA ')
 
           _, value_length, _flags, key = line.split
+          # We can get rid of this read_exact call, we only need to do one
+          # Can we byteslice all of these instead?
           value = @connection_manager.read_exact(value_length.to_i)
           @connection_manager.read_exact(2) # Read trailing \r\n
           results[key[1..]] = value
