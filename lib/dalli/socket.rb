@@ -8,10 +8,16 @@ module Dalli
   # Various socket implementations used by Dalli.
   ##
   module Socket
+    SOCKET_BUFFER_SIZE = 8196
     ##
     # Common methods for all socket implementations.
     ##
     module InstanceMethods
+      def initialize(*)
+        super
+        @read_buffer = StringIO.new
+      end
+
       def readfull(count)
         value = String.new(capacity: count + 1)
         loop do
@@ -23,15 +29,41 @@ module Dalli
       end
 
       def read_available
-        value = +''
         loop do
-          result = read_nonblock(8196, exception: false)
+          result = read_nonblock(SOCKET_BUFFER_SIZE, exception: false)
+          raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if nonblock_timed_out?(result)
           break if WAIT_RCS.include?(result)
           raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
 
-          value << result
+          @read_buffer << result
         end
-        value
+        @read_buffer.rewind
+        data = @read_buffer.read
+        @read_buffer.truncate(0)
+        @read_buffer.rewind
+        data
+      end
+
+      def read_until(delimiter)
+        if @read_buffer.length > 0
+          result = @read_buffer.gets(delimiter)
+          return result if result.end_with?(delimiter)
+          @read_buffer.rewind
+        end
+
+        loop do
+          result = read_nonblock(SOCKET_BUFFER_SIZE, exception: false)
+          break if WAIT_RCS.include?(result)
+          raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if nonblock_timed_out?(result)
+          raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
+
+          @read_buffer << result
+          break if result.end_with?(delimiter)
+        end
+        data = @read_buffer.gets(delimiter)
+        @read_buffer.truncate(0)
+        @read_buffer.rewind
+        data
       end
 
       WAIT_RCS = %i[wait_writable wait_readable].freeze

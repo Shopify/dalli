@@ -60,7 +60,7 @@ module Dalli
         @connection_manager.flush
         # read all the memcached responses back and build a hash of key value pairs
         results = {}
-        while (line = @connection_manager.readline.chomp) != ''
+        while (line = @connection_manager.read_line.chomp) != ''
           break if line.start_with?('MN')
           next unless line.start_with?('VA ')
 

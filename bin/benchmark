@@ -58,7 +58,7 @@ sock.write("set sock_key 0 3600 1000000\r\n")
 sock.write(payload)
 sock.write("\r\n")
 sock.flush
-sock.readline # clear the buffer
+sock.gets("\r\n") # clear the buffer
 
 # ensure we have basic data for the benchmarks and get calls
 payload_fifty = 'B' * 50_000
@@ -110,7 +110,7 @@ def sock_get_multi(sock, pairs)
   # read all the memcached responses back and build a hash of key value pairs
   results = {}
   last_result = false
-  while (line = sock.readline.chomp) != ''
+  while (line = sock.gets("\r\n").chomp) != ''
     last_result = true if line.start_with?('EN ')
     next unless line.start_with?('VA ') || last_result
 
@@ -136,7 +136,7 @@ when 'set'
       sock.write(payload)
       sock.write("\r\n")
       sock.flush
-      sock.readline # clear the buffer
+      sock.gets("\r\n") # clear the buffer
     end
     x.compare!
   end
@@ -148,7 +148,7 @@ when 'get'
     x.report('meta_get 1MB STRING') { meta_client.get('meta_key') }
     x.report('get 1MB raw sock') do
       sock.write("get sock_key\r\n")
-      sock.readline
+      sock.gets("\r\n")
       sock.read(1_000_000)
     end
     x.compare!
@@ -184,7 +184,7 @@ when 'set_multi'
                               capacity: key.size + value_bytesize + 40) << value << TERMINATOR)
       end
       sock.flush
-      sock.readline # clear the buffer
+      sock.gets("\r\n") # clear the buffer
     end
     x.report('write_mutli 100 keys') { meta_client.set_multi(pairs, 3600, raw: true) }
     x.compare!
