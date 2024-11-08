@@ -8,10 +8,16 @@ module Dalli
   # Various socket implementations used by Dalli.
   ##
   module Socket
+    SOCKET_BUFFER_SIZE = 8196
     ##
     # Common methods for all socket implementations.
     ##
     module InstanceMethods
+      def reset_buffer
+        read_buffer.truncate(0)
+        read_buffer.rewind
+      end
+
       def readfull(count)
         value = String.new(capacity: count + 1)
         loop do
@@ -23,36 +29,63 @@ module Dalli
       end
 
       def read_available
-        value = +''
         loop do
-          result = read_nonblock(8196, exception: false)
+          result = read_nonblock(SOCKET_BUFFER_SIZE, exception: false)
+          raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if read_nonblock_timed_out?(result)
           break if WAIT_RCS.include?(result)
           raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
 
-          value << result
+          read_buffer << result
         end
-        value
+        read_buffer.rewind
+        data = read_buffer.read
+        data
+      ensure
+        reset_buffer
+      end
+
+      def read_until(delimiter)
+        if read_buffer.length - read_buffer.pos > 0
+          result = read_buffer.gets(delimiter)
+          return result if result.end_with?(delimiter)
+          read_buffer.rewind
+        end
+
+        loop do
+          result = read_nonblock(SOCKET_BUFFER_SIZE, exception: false)
+          break if WAIT_RCS.include?(result)
+          raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if read_nonblock_timed_out?(result)
+          raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
+
+          read_buffer << result
+          break if result.end_with?(delimiter)
+        end
+        read_buffer.gets(delimiter)
+        data
       end
 
       WAIT_RCS = %i[wait_writable wait_readable].freeze
 
       def append_to_buffer?(result)
-        raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if nonblock_timed_out?(result)
+        raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if read_nonblock_timed_out?(result)
         raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
 
         !WAIT_RCS.include?(result)
       end
 
-      def nonblock_timed_out?(result)
-        return true if result == :wait_readable && !wait_readable(options[:socket_timeout])
-
-        # TODO: Do we actually need this?  Looks to be only used in read_nonblock
-        result == :wait_writable && !wait_writable(options[:socket_timeout])
+      def read_nonblock_timed_out?(result)
+        result == :wait_readable && !wait_readable(options[:socket_timeout])
       end
 
       FILTERED_OUT_OPTIONS = %i[username password].freeze
       def logged_options
         options.reject { |k, _| FILTERED_OUT_OPTIONS.include? k }
+      end
+
+      private
+
+      def read_buffer
+        @read_buffer ||= StringIO.new
       end
     end
 
