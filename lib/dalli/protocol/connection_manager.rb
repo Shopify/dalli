@@ -154,12 +154,6 @@ module Dalli
         error_on_request!(e)
       end
 
-      def read_exact(count)
-        @sock.read(count)
-      rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
-        error_on_request!(e)
-      end
-
       def read(count)
         @sock.readfull(count)
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e

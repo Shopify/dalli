@@ -9,14 +9,14 @@ module Dalli
     # Manages the buffer for responses from memcached.
     ##
     class ResponseBuffer
-      def initialize(io_source, response_processor)
-        @io_source = io_source
+      def initialize(connection_manager, response_processor)
+        @connection_manager = connection_manager
         @response_processor = response_processor
         @buffer = nil
       end
 
       def read
-        @buffer << @io_source.read_nonblock
+        @buffer << @connection_manager.read_nonblock
       end
 
       # Attempts to process a single response from the buffer.  Starts
