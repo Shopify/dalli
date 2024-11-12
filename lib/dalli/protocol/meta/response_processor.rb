@@ -231,7 +231,7 @@ module Dalli
         end
 
         def read_line
-          @io_source.read_line&.chomp!(TERMINATOR)
+          @io_source.read_line
         end
 
         def next_line_to_tokens
@@ -240,7 +240,7 @@ module Dalli
         end
 
         def read_data(data_size)
-          @io_source.read(data_size + TERMINATOR.bytesize)&.chomp!(TERMINATOR)
+          @io_source.read_exact(data_size)
         end
       end
     end

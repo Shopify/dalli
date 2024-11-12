@@ -13,6 +13,7 @@ module Dalli
     ##
     class Meta < Base
       TERMINATOR = "\r\n"
+      NO_OP_REQ = "mn\r\n"
 
       def response_processor
         @response_processor ||= ResponseProcessor.new(@connection_manager, @value_marshaller)
@@ -26,47 +27,40 @@ module Dalli
       # * doesn't support cas at the moment
       def write_multi_storage_req(_mode, pairs, ttl = nil, _cas = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
-        count = pairs.length
-        tail = ''
 
         pairs.each do |key, raw_value|
-          count -= 1
           (value, bitflags) = @value_marshaller.store(key, raw_value, options)
           encoded_key, _base64 = KeyRegularizer.encode(key)
           value_bytesize = value.bytesize
-          # if last pair of hash, add TERMINATOR
-          tail = count.zero? ? '' : 'q'
-
-          # NOTE: The most efficient way to build the command
-          # * avoid making new strings capacity is set to the max possible size of the command
-          # * socket write each piece indepentantly to avoid extra allocation
-          # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
-          # * avoids using the request formatter pattern for single inline builder
-          @connection_manager.write("ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS #{tail}\r\n")
+          @connection_manager.write("ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q\r\n")
           @connection_manager.write(value)
           @connection_manager.write(TERMINATOR)
         end
-        response_processor.meta_set_with_cas
+        @connection_manager.flush
+        noop
+        nil
       end
 
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
+        req = +''
         keys.each do |key|
-          @connection_manager.write("mg #{key} v f k q\r\n")
+          req << "mg #{key} v f k q\r\n"
         end
-        @connection_manager.write("mn\r\n")
+        req << NO_OP_REQ
+        @connection_manager.write(req)
         @connection_manager.flush
         # read all the memcached responses back and build a hash of key value pairs
         results = {}
-        while (line = @connection_manager.readline.chomp!(TERMINATOR)) != ''
+        while (line = @connection_manager.read_line)
           break if line.start_with?('MN')
           next unless line.start_with?('VA ')
 
           # VA value_length flags key
           tokens = line.split
-          value = @connection_manager.read_exact(tokens[1].to_i + TERMINATOR.length)
+          value = @connection_manager.read_exact(tokens[1].to_i)
           results[tokens[3][1..]] =
-            @value_marshaller.retrieve(value.chomp!(TERMINATOR), @response_processor.bitflags_from_tokens(tokens))
+            @value_marshaller.retrieve(value, @response_processor.bitflags_from_tokens(tokens))
         end
         results
       end
