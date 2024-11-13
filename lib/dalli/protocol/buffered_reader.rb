@@ -45,6 +45,7 @@ module Dalli
         str.force_encoding(Encoding::UTF_8)
       end
 
+      # rubocop:disable Metrics/AbcSize
       def fill_buffer(force_size, size = @chunk_size)
         remaining = size
         buffer_size = @buffer.bytesize
@@ -89,6 +90,7 @@ module Dalli
           raise IO::TimeoutError if current_timeout <= 0
         end
       end
+      # rubocop:enable Metrics/AbcSize
     end
   end
 end
