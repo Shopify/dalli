@@ -68,7 +68,7 @@ module Dalli
           when :wait_readable
             @offset -= buffer_size if buffer_is_empty && @buffer.empty?
 
-            raise IO::TimeoutError unless @io.wait_readable(current_timeout)
+            raise Timeout::Error unless @io.wait_readable(current_timeout)
           when :wait_writable
             raise Dalli::DalliError, 'Unreachable code path wait_writable'
           when nil
@@ -87,7 +87,7 @@ module Dalli
           end
 
           current_timeout = [current_timeout - (Time.now - start_time), 0.0].max
-          raise IO::TimeoutError if current_timeout <= 0
+          raise Timeout::Error if current_timeout <= 0
         end
       end
       # rubocop:enable Metrics/AbcSize
