@@ -240,7 +240,7 @@ module Dalli
         end
 
         def read_data(data_size)
-          @io_source.read_exact(data_size)
+          @io_source.read(data_size)
         end
       end
     end

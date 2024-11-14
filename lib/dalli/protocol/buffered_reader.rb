@@ -35,7 +35,7 @@ module Dalli
         line.force_encoding(Encoding::UTF_8)
       end
 
-      def read_exact(size)
+      def read(size)
         size += TERMINATOR_SIZE
         needed = size - (@buffer.bytesize - @offset)
         fill_buffer(true, needed) if needed.positive?
@@ -94,9 +94,6 @@ module Dalli
         end
       end
       # rubocop:enable Metrics/AbcSize
-      # rubocop:enable Metrics/CyclomaticComplexity
-      # rubocop:enable Metrics/PerceivedComplexity
-      # rubocop:enable Metrics/MethodLength
     end
   end
 end
