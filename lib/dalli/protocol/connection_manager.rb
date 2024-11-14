@@ -12,6 +12,7 @@ module Dalli
     # Manages the socket connection to the server, including ensuring liveness
     # and retries.
     ##
+    # rubocop:disable Metrics/ClassLength
     class ConnectionManager
       DEFAULTS = {
         # seconds between trying to contact a remote server
@@ -269,5 +270,6 @@ module Dalli
         Dalli.logger.warn { format('%<name>s is back (downtime was %<time>.3f seconds)', name: name, time: time) }
       end
     end
+    # rubocop:enable Metrics/ClassLength
   end
 end
