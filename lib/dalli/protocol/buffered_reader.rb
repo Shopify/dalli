@@ -68,10 +68,7 @@ module Dalli
           when :wait_readable
             @offset -= buffer_size if buffer_is_empty && @buffer.empty?
 
-            unless @io.wait_readable(current_timeout)
-              raise Dalli::DalliError,
-                    "Timeout error wait readable: #{current_timeout}"
-            end
+            raise IO::TimeoutError unless @io.wait_readable(current_timeout)
           when :wait_writable
             raise Dalli::DalliError, 'Unreachable code path wait_writable'
           when nil

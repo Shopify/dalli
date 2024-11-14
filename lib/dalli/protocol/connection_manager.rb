@@ -151,10 +151,10 @@ module Dalli
       end
 
       def read_line
-        data = if @options[:protocol] == :binary
-                 @sock.gets("\r\n")
-               else
+        data = if @options[:protocol]&.to_sym == :meta
                  @buffered_reader.read_line
+               else
+                 @sock.gets("\r\n")
                end
         error_on_request!('EOF in read_line') if data.nil?
         data
@@ -163,10 +163,10 @@ module Dalli
       end
 
       def read(count)
-        if @options[:protocol] == :binary
-          @sock.read(count)
-        else
+        if @options[:protocol]&.to_sym == :meta
           @buffered_reader.read(count)
+        else
+          @sock.read(count)
         end
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
         error_on_request!(e)
