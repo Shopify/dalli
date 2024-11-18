@@ -98,9 +98,14 @@ module Dalli
       @servers.each(&:close)
     end
 
+    def threadsafe?
+      !!@threadsafe
+    end
+
     private
 
     def threadsafe!
+      @threadsafe = true
       @servers.each do |s|
         s.extend(Dalli::Threadsafe)
       end

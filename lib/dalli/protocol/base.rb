@@ -35,8 +35,7 @@ module Dalli
           @connection_manager.start_request!
           response = send(opkey, *args)
 
-          # pipelined_get emit query but doesn't read the response(s)
-          @connection_manager.finish_request! unless opkey == :pipelined_get
+          @connection_manager.finish_request!
 
           response
         rescue Dalli::MarshalError => e
@@ -74,7 +73,6 @@ module Dalli
       def pipeline_response_setup
         verify_pipelined_state(:getkq)
         write_noop
-        response_buffer.reset
       end
 
       # Attempt to receive and parse as many key/value pairs as possible
@@ -214,15 +212,6 @@ module Dalli
         authenticate_connection if require_auth?
         @version = version # Connect socket if not authed
         up!
-      end
-
-      def pipelined_get(keys)
-        req = +''
-        keys.each do |key|
-          req << quiet_get_request(key)
-        end
-        # Could send noop here instead of in pipeline_response_setup
-        write(req)
       end
 
       def response_buffer

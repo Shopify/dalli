@@ -45,6 +45,34 @@ module Dalli
         str.force_encoding(Encoding::UTF_8)
       end
 
+      # rubocop:disable Metrics/MethodLength
+      def write(str)
+        remaining = str.bytesize
+        current_timeout = @timeout.to_f
+
+        loop do
+          start_time = Time.now
+          bytes = @io.write_nonblock(str, exception: false)
+          case bytes
+          when Integer
+            remaining -= bytes
+            return if remaining <= 0
+
+            str = str.byteslice(bytes..-1)
+          when :wait_writable
+            @io.wait_writable(current_timeout)
+          when nil
+            raise SystemCallError, 'Failed to write to socket'
+          else
+            raise SystemCallError, 'Unhandled write_nonblock return value'
+          end
+
+          current_timeout -= (Time.now - start_time)
+          raise Timeout::Error if current_timeout <= 0
+        end
+      end
+      # rubocop:enable Metrics/MethodLength
+
       # rubocop:disable Metrics/AbcSize
       # rubocop:disable Metrics/CyclomaticComplexity
       # rubocop:disable Metrics/PerceivedComplexity
@@ -65,15 +93,7 @@ module Dalli
                   end
 
           case bytes
-          when :wait_readable
-            @offset -= buffer_size if buffer_is_empty && @buffer.empty?
-
-            raise Timeout::Error unless @io.wait_readable(current_timeout)
-          when :wait_writable
-            raise Dalli::DalliError, 'Unreachable code path wait_writable'
-          when nil
-            raise EOFError
-          else
+          when Integer, String
             if buffer_is_empty
               @offset = start
               buffer_is_empty = false
@@ -84,9 +104,17 @@ module Dalli
             remaining -= bytes.bytesize
 
             return if !force_size || remaining <= 0
+          when :wait_readable
+            @offset -= buffer_size if buffer_is_empty && @buffer.empty?
+
+            raise Timeout::Error unless @io.wait_readable(current_timeout)
+          when nil
+            raise EOFError
+          else
+            raise SystemCallError, 'Unhandled read_nonblock return value'
           end
 
-          current_timeout = [current_timeout - (Time.now - start_time), 0.0].max
+          current_timeout -= (Time.now - start_time)
           raise Timeout::Error if current_timeout <= 0
         end
       end

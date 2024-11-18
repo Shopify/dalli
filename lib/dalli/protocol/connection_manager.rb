@@ -174,15 +174,13 @@ module Dalli
       end
 
       def write(bytes)
-        @sock.write(bytes)
+        if @options[:protocol]&.to_sym == :meta
+          @buffered_reader.write(bytes)
+        else
+          @sock.write(bytes)
+        end
       rescue SystemCallError, *TIMEOUT_ERRORS => e
         error_on_request!(e)
-      end
-
-      # Non-blocking read.  Here to support the operation
-      # of the get_multi operation
-      def read_nonblock
-        @sock.read_available
       end
 
       def flush

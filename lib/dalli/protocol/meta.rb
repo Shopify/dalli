@@ -43,6 +43,7 @@ module Dalli
 
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
+        puts 'read multi req'
         req = +''
         keys.each do |key|
           req << "mg #{key} v f k q\r\n"
@@ -52,7 +53,9 @@ module Dalli
         @connection_manager.flush
         # read all the memcached responses back and build a hash of key value pairs
         results = {}
+        puts 'read multi request loop'
         while (line = @connection_manager.read_line)
+          puts "line: #{line}"
           break if line.start_with?('MN')
           next unless line.start_with?('VA ')
 
@@ -62,6 +65,7 @@ module Dalli
           results[tokens[3][1..]] =
             @value_marshaller.retrieve(value, @response_processor.bitflags_from_tokens(tokens))
         end
+        puts 'end of read multi req'
         results
       end
       # rubocop:enable Metrics/AbcSize
