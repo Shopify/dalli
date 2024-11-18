@@ -47,7 +47,7 @@ describe 'Pipelined Get' do
           assert_empty(resp)
 
           pairs = { 'a' => 'foo', 'b' => 123, 'c' => 'raw' }
-          Toxiproxy[/dalli_memcached/].down do
+          Toxiproxy[:dalli_memcached].down do
             dc.set_multi(pairs, 60, raw: true)
           end
           # Invocation without block

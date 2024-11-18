@@ -92,7 +92,7 @@ describe 'Pipelined Get' do
           dc.set('b', 123)
           dc.set('c', %w[a b c])
 
-          Toxiproxy[/dalli_memcached/].down do
+          Toxiproxy[:dalli_memcached].down do
             resp = dc.get_multi(%w[a b c d e f])
             expected_resp = {}
 
