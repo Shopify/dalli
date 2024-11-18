@@ -39,6 +39,7 @@ describe 'Network' do
             Toxiproxy[/dalli_memcached/].downstream(:latency, latency: 2000).apply do
               keys.each do |key|
                 assert_raises Dalli::RingError do
+                  puts "Getting #{key}"
                   dc.get(key)
                 end
               end
