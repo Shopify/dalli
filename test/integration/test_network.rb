@@ -309,7 +309,7 @@ describe 'Network' do
       end
 
       it 'passes a simple smoke test on unix socket' do
-        memcached_persistent(:binary, MemcachedMock::UNIX_SOCKET_PATH) do |dc, path|
+        memcached_persistent(:binary, Memcached::Helper::UNIX_SOCKET_PATH) do |dc, path|
           resp = dc.flush
 
           refute_nil resp
