@@ -20,7 +20,7 @@ describe 'Network' do
           end
         end
 
-        it 'get handles socket timeouts errors' do
+        it 'handles socket timeouts errors' do
           skip if p == :binary
 
           toxi_memcached_persistent(p, 21_345, '', { socket_timeout: 1 }) do |dc|
@@ -36,10 +36,9 @@ describe 'Network' do
             dc.set('c', %w[a b c])
 
             keys = %w[a b c d e f]
-            Toxiproxy[/dalli_memcached/].downstream(:latency, latency: 2000).apply do
+            Toxiproxy[/dalli_memcached/].toxic(:latency, latency: 2000).apply do
               keys.each do |key|
                 assert_raises Dalli::RingError do
-                  puts "Getting #{key}"
                   dc.get(key)
                 end
               end
@@ -47,7 +46,7 @@ describe 'Network' do
           end
         end
 
-        it 'get handles network errors' do
+        it 'handles network errors' do
           skip if p == :binary
 
           toxi_memcached_persistent(p) do |dc|
