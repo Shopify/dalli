@@ -13,62 +13,72 @@ describe 'Network' do
           end
         end
 
-        describe 'with a fake server' do
-          it 'handle connection reset' do
-            memcached_mock(lambda(&:close)) do
-              dc = Dalli::Client.new('localhost:19123')
-              assert_raises Dalli::RingError, message: 'No server available' do
-                dc.get('abc')
+        it 'handle socket timeouts' do
+          dc = Dalli::Client.new('localhost:19123', socket_timeout: 0)
+          assert_raises Dalli::RingError, message: 'No server available' do
+            dc.get('abc')
+          end
+        end
+
+        it 'get handles socket timeouts errors' do
+          skip if p == :binary
+
+          toxi_memcached_persistent(p, 21_345, '', { socket_timeout: 1 }) do |dc|
+            dc.close
+            dc.flush
+
+            resp = dc.get_multi(%w[a b c d e f])
+
+            assert_empty(resp)
+
+            dc.set('a', 'foo')
+            dc.set('b', 123)
+            dc.set('c', %w[a b c])
+
+            keys = %w[a b c d e f]
+            Toxiproxy[/dalli_memcached/].downstream(:latency, latency: 2000).apply do
+              keys.each do |key|
+                assert_raises Dalli::RingError do
+                  dc.get(key)
+                end
               end
             end
           end
+        end
 
-          it 'handle connection reset with unix socket' do
-            socket_path = MemcachedMock::UNIX_SOCKET_PATH
-            memcached_mock(lambda(&:close), :start_unix, socket_path) do
-              dc = Dalli::Client.new(socket_path)
-              assert_raises Dalli::RingError, message: 'No server available' do
-                dc.get('abc')
+        it 'get handles network errors' do
+          skip if p == :binary
+
+          toxi_memcached_persistent(p) do |dc|
+            dc.close
+            dc.flush
+
+            resp = dc.get_multi(%w[a b c d e f])
+
+            assert_empty(resp)
+
+            dc.set('a', 'foo')
+            dc.set('b', 123)
+            dc.set('c', %w[a b c])
+
+            keys = %w[a b c d e f]
+            Toxiproxy[/dalli_memcached/].down do
+              keys.each do |key|
+                assert_raises Dalli::RingError do
+                  dc.get(key)
+                end
               end
             end
           end
+        end
 
-          it 'handle malformed response' do
-            memcached_mock(->(sock) { sock.write('123') }) do
-              dc = Dalli::Client.new('localhost:19123')
-              assert_raises Dalli::RingError, message: 'No server available' do
-                dc.get('abc')
-              end
-            end
-          end
+        it 'handle connect timeouts' do
+          toxi_memcached_persistent(p) do |dc|
+            dc.close
 
-          it 'handle socket timeouts' do
-            dc = Dalli::Client.new('localhost:19123', socket_timeout: 0)
-            assert_raises Dalli::RingError, message: 'No server available' do
-              dc.get('abc')
-            end
-          end
-
-          it 'handle connect timeouts' do
-            memcached_mock(lambda { |sock|
-                             sleep(0.6)
-                             sock.close
-                           }, :delayed_start) do
-              dc = Dalli::Client.new('localhost:19123')
-              assert_raises Dalli::RingError, message: 'No server available' do
-                dc.get('abc')
-              end
-            end
-          end
-
-          it 'handle read timeouts' do
-            memcached_mock(lambda { |sock|
-                             sleep(0.6)
-                             sock.write('giraffe')
-                           }) do
-              dc = Dalli::Client.new('localhost:19123')
-              assert_raises Dalli::RingError, message: 'No server available' do
-                dc.get('abc')
+            Toxiproxy[/dalli_memcached/].down do
+              assert_raises Dalli::RingError do
+                dc.get('foo')
               end
             end
           end
