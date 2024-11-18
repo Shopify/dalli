@@ -46,7 +46,7 @@ module Memcached
         Toxiproxy.populate([{
                              name: 'dalli_memcached',
                              listen: "localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}",
-                             upstream: "localhost:#{port_or_socket}"
+                             upstream: 'localhost:21345'
                            }])
       end
       @toxy_configured ||= true
