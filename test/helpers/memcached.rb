@@ -41,9 +41,12 @@ module Memcached
     # uses port 21347 for the Toxiproxy proxy port and the specified port_or_socket
     # for the memcached process.
     ###
-    def toxi_memcached_persistent(protocol = :binary, args = '', client_options = {}, &block)
+    def toxi_memcached_persistent(protocol = :binary, args = '', client_options = {})
       MemcachedManager.start(MemcachedManager::TOXIPROXY_UPSTREAM_PORT, args)
-      dc = Dalli::Client.new("localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}", client_options)
+      dc = Dalli::Client.new(
+        "localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}",
+        client_options.merge(protocol: protocol)
+      )
       yield dc
     end
 
