@@ -42,15 +42,9 @@ module Memcached
     # for the memcached process.
     ###
     def toxi_memcached_persistent(protocol = :binary, args = '', client_options = {}, &block)
-      unless @toxy_configured
-        Toxiproxy.populate([{
-                             name: 'dalli_memcached',
-                             listen: "localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}",
-                             upstream: 'localhost:21345'
-                           }])
-      end
-      @toxy_configured ||= true
-      memcached_persistent(protocol, MemcachedManager::TOXIPROXY_MEMCACHED_PORT, args, client_options, &block)
+      MemcachedManager.start(MemcachedManager::TOXIPROXY_UPSTREAM_PORT, args)
+      dc = Dalli::Client.new("localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}", client_options)
+      yield dc
     end
 
     # Launches a persistent memcached process, configured to use SSL

@@ -24,6 +24,12 @@ raise StandardError, 'No supported version of memcached could be found.' unless 
 # Generate self-signed certs for SSL once per suite run.
 CertificateGenerator.generate
 
+Toxiproxy.populate([{
+                     name: 'dalli_memcached',
+                     listen: "localhost:#{MemcachedManager::TOXIPROXY_MEMCACHED_PORT}",
+                     upstream: "localhost:#{MemcachedManager::TOXIPROXY_UPSTREAM_PORT}"
+                   }])
+
 module Minitest
   class Spec
     include Memcached::Helper
