@@ -93,9 +93,7 @@ module Dalli
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
     def get_multi(*keys)
-      keys.flatten!
-      keys.compact!
-
+      puts 'Get multi command'
       return {} if keys.empty?
 
       if block_given?
@@ -206,6 +204,7 @@ module Dalli
     end
 
     def set(key, value, ttl = nil, req_options = nil)
+      puts "Set command: #{key}"
       set_cas(key, value, 0, ttl, req_options)
     end
 
@@ -338,6 +337,7 @@ module Dalli
     ##
     ## Version of the memcache servers.
     def version
+      puts 'Version command'
       values = {}
       ring.servers.each do |server|
         values[server.name.to_s] = server.alive? ? server.request(:version) : nil

@@ -8,59 +8,12 @@ module Dalli
   # Various socket implementations used by Dalli.
   ##
   module Socket
-    NON_BLOCK_SIZE = 8196
-    ##
-    # Common methods for all socket implementations.
-    ##
-    module InstanceMethods
-      def readfull(count)
-        value = String.new(capacity: count + 1)
-        loop do
-          result = read_nonblock(count - value.bytesize, exception: false)
-          value << result if append_to_buffer?(result)
-          break if value.bytesize == count
-        end
-        value
-      end
-
-      def read_available
-        value = +''
-        loop do
-          result = read_nonblock(NON_BLOCK_SIZE, exception: false)
-          break if WAIT_RCS.include?(result)
-          raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
-
-          value << result
-        end
-        value
-      end
-
-      WAIT_RCS = %i[wait_writable wait_readable].freeze
-
-      def append_to_buffer?(result)
-        raise Timeout::Error, "IO timeout: #{logged_options.inspect}" if read_nonblock_timed_out?(result)
-        raise Errno::ECONNRESET, "Connection reset: #{logged_options.inspect}" unless result
-
-        !WAIT_RCS.include?(result)
-      end
-
-      def read_nonblock_timed_out?(result)
-        result == :wait_readable && !wait_readable(options[:socket_timeout])
-      end
-
-      FILTERED_OUT_OPTIONS = %i[username password].freeze
-      def logged_options
-        options.except(*FILTERED_OUT_OPTIONS)
-      end
-    end
-
     ##
     # Wraps the below TCP socket class in the case where the client
     # has configured a TLS/SSL connection between Dalli and the
     # Memcached server.
     ##
     class SSLSocket < ::OpenSSL::SSL::SSLSocket
-      include Dalli::Socket::InstanceMethods
       def options
         io.options
       end
@@ -82,7 +35,6 @@ module Dalli
     # A standard TCP socket between the Dalli client and the Memcached server.
     ##
     class TCP < TCPSocket
-      include Dalli::Socket::InstanceMethods
       # options - supports enhanced logging in the case of a timeout
       attr_accessor :options
 
@@ -161,8 +113,6 @@ module Dalli
       # is running on the same machine as the Dalli client.
       ##
       class UNIX < UNIXSocket
-        include Dalli::Socket::InstanceMethods
-
         # options - supports enhanced logging in the case of a timeout
         # server  - used to support IO.select in the pipelined getter
         attr_accessor :options
