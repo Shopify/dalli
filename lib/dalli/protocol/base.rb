@@ -66,11 +66,6 @@ module Dalli
 
       def unlock!; end
 
-      # Did the last call to #pipeline_response_setup complete successfully?
-      def pipeline_complete?
-        !response_buffer.in_progress?
-      end
-
       def username
         @options[:username] || ENV.fetch('MEMCACHE_USERNAME', nil)
       end
@@ -114,7 +109,7 @@ module Dalli
         raise_down_error unless ensure_connected!
       end
 
-      def verify_pipelined_state(_opkey)
+      def verify_pipelined_state
         @connection_manager.confirm_in_progress!
         raise_down_error unless connected?
       end
@@ -179,10 +174,6 @@ module Dalli
 
         write(req)
         write_noop
-      end
-
-      def response_buffer
-        @response_buffer ||= ResponseBuffer.new(@connection_manager, response_processor)
       end
 
       def log_marshal_err(key, err)

@@ -37,6 +37,12 @@ module Dalli
       end
     end
 
+    def pipeline_abort
+      @lock.synchronize do
+        super
+      end
+    end
+
     def lock!
       @lock.mon_enter
     end

@@ -53,6 +53,7 @@ module Dalli
       # call to the server.
       ##
       def pipelined_get_responses
+        verify_pipelined_state
         results = {}
         loop do
           key, value = response_processor.meta_get_or_noop_with_key_and_value
