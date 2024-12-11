@@ -10,44 +10,21 @@ module Dalli
       @key_manager = key_manager
     end
 
-    def optimized_for_single_server(keys)
-      keys.map! { |a| @key_manager.validate_key(a.to_s) }
-      results = @ring.servers.first.request(:read_multi_req, keys)
-      @key_manager.key_values_without_namespace(results)
-    rescue NetworkError => e
-      Dalli.logger.debug { e.inspect }
-      Dalli.logger.debug { 'bailing on pipelined gets because of timeout' }
-      {}
-    end
-
     ##
     # Yields, one at a time, keys and their values+attributes.
     #
     def process(keys, &block)
       return {} if keys.empty?
 
-      # optimized path only works for single server setups at the moment
-      if @ring.servers.size > 1 || block
-        @ring.lock do
-          servers = setup_requests(keys)
-          start_time = Time.now
-          servers = fetch_responses(servers, start_time, @ring.socket_timeout, &block) until servers.empty?
-        end
-      else
-        optimized_for_single_server(keys)
+      @ring.lock do
+        groups = groups_for_keys(keys)
+        make_getkq_requests(groups)
+        servers = fetch_responses(servers, Time.now, @ring.socket_timeout, &block) until servers.empty?
       end
     rescue NetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying pipelined gets because of timeout' }
       retry
-    end
-
-    def setup_requests(keys)
-      groups = groups_for_keys(keys)
-      make_getkq_requests(groups)
-
-      # TODO: How does this exit on a NetworkError
-      finish_queries(groups.keys)
     end
 
     ##
@@ -60,51 +37,11 @@ module Dalli
     ##
     def make_getkq_requests(groups)
       groups.each do |server, keys_for_server|
-        server.request(:pipelined_get, keys_for_server)
+        server.request(:pipelined_get_request, keys_for_server)
       rescue DalliError, NetworkError => e
         Dalli.logger.debug { e.inspect }
         Dalli.logger.debug { "unable to get keys for server #{server.name}" }
       end
-    end
-
-    ##
-    # This loops through the servers that have keys in
-    # our set, sending the noop to terminate the set of queries.
-    ##
-    def finish_queries(servers)
-      deleted = []
-
-      servers.each do |server|
-        next unless server.connected?
-
-        begin
-          finish_query_for_server(server)
-        rescue Dalli::NetworkError
-          raise
-        rescue Dalli::DalliError
-          deleted.append(server)
-        end
-      end
-
-      servers.delete_if { |server| deleted.include?(server) }
-    rescue Dalli::NetworkError
-      abort_without_timeout(servers)
-      raise
-    end
-
-    def finish_query_for_server(server)
-      server.pipeline_response_setup
-    rescue Dalli::NetworkError
-      raise
-    rescue Dalli::DalliError => e
-      Dalli.logger.debug { e.inspect }
-      Dalli.logger.debug { "Results from server: #{server.name} will be missing from the results" }
-      raise
-    end
-
-    # Swallows Dalli::NetworkError
-    def abort_without_timeout(servers)
-      servers.each(&:pipeline_abort)
     end
 
     def fetch_responses(servers, start_time, timeout, &block)
@@ -140,10 +77,15 @@ module Dalli
     end
 
     # Swallows Dalli::NetworkError
+    def abort_without_timeout(servers)
+      servers.each(&:pipeline_abort)
+    end
+
+    # Swallows Dalli::NetworkError
     def abort_with_timeout(servers)
       abort_without_timeout(servers)
       servers.each do |server|
-        Dalli.logger.debug { "memcached at #{server.name} did not response within timeout" }
+        Dalli.logger.debug { "memcached at #{server.name} did not respond within timeout" }
       end
 
       true # Required to simplify caller
@@ -152,11 +94,11 @@ module Dalli
     # Processes responses from a server.  Returns true if there are no
     # additional responses from this server.
     def process_server(server)
-      server.pipeline_next_responses.each_pair do |key, value_list|
-        yield @key_manager.key_without_namespace(key), value_list
+      server.pipelined_get_responses.each_pair do |key, value|
+        yield @key_manager.key_without_namespace(key), value
       end
 
-      server.pipeline_complete?
+      !server.request_in_progress?
     end
 
     def servers_with_response(servers, timeout)

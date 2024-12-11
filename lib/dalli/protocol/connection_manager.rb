@@ -31,6 +31,8 @@ module Dalli
       attr_accessor :hostname, :port, :socket_type, :options
       attr_reader :sock
 
+      def_delegators :buffered_io, :buffered_line?
+
       def initialize(hostname, port, socket_type, client_options)
         @hostname = hostname
         @port = port
