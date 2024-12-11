@@ -16,10 +16,9 @@ module Dalli
       DEFAULT_CHUNK_SIZE = 1024 * 8
       DEFAULT_SOCKET_TIMEOUT = ConnectionManager::DEFAULTS[:socket_timeout]
 
-      def initialize(io_sources, chunk_size = nil, timeout = nil)
-        @io_sources_to_buffers = io_sources.map do |io_source|
-          [io_source, +'']
-        end.to_h
+      def initialize(io, chunk_size = nil, timeout = nil)
+        @io = io
+        @buffer = +''
         @offset = 0
         @chunk_size = chunk_size || DEFAULT_CHUNK_SIZE
         @timeout = timeout || DEFAULT_SOCKET_TIMEOUT # seconds
@@ -50,11 +49,9 @@ module Dalli
 
       def write(str)
         remaining = str.bytesize
-        bytes = :wait_writable
 
         loop do
-          _, current_io = IO.select(nil, @io_sources_to_buffers.keys, nil, @timeout)
-          bytes = current_io.write_nonblock(str, exception: false)
+          bytes = @io.write_nonblock(str, exception: false)
 
           case bytes
           when Integer
@@ -63,7 +60,7 @@ module Dalli
 
             str = str.byteslice(bytes..-1)
           when :wait_writable
-            raise Timeout::Error unless IO.select(nil, @io_sources_to_buffers.keys, nil, @timeout)
+            raise Timeout::Error unless @io.wait_writable(@timeout)
           else
             raise SystemCallError, 'Unhandled write_nonblock return value'
           end
@@ -103,7 +100,7 @@ module Dalli
           when :wait_readable
             @offset -= buffer_size if buffer_is_empty && @buffer.empty?
 
-            raise Timeout::Error unless IO.select(@io_sources_to_buffers.keys, nil, nil, @timeout)
+            raise Timeout::Error unless @io.wait_readable(@timeout)
           when nil
             raise EOFError
           else
