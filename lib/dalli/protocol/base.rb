@@ -18,7 +18,7 @@ module Dalli
 
       def_delegators :@value_marshaller, :serializer, :compressor, :compression_min_size, :compress_by_default?
       def_delegators :@connection_manager, :name, :sock, :hostname, :port, :close, :connected?, :socket_timeout,
-                     :socket_type, :up!, :down!, :write, :reconnect_down_server?, :raise_down_error
+                     :socket_type, :up!, :down!, :write, :reconnect_down_server?, :raise_down_error, :request_in_progress?
 
       def initialize(attribs, client_options = {})
         hostname, port, socket_type, @weight, user_creds = ServerConfigParser.parse(attribs)
@@ -36,7 +36,7 @@ module Dalli
           response = send(opkey, *args)
 
           # pipelined_get emit query but doesn't read the response(s)
-          @connection_manager.finish_request! unless opkey == :pipelined_get
+          @connection_manager.finish_request! unless opkey == :pipelined_get_request
 
           response
         rescue Dalli::MarshalError => e
@@ -65,67 +65,6 @@ module Dalli
       def lock!; end
 
       def unlock!; end
-
-      # Start reading key/value pairs from this connection. This is usually called
-      # after a series of GETKQ commands. A NOOP is sent, and the server begins
-      # flushing responses for kv pairs that were found.
-      #
-      # Returns nothing.
-      def pipeline_response_setup
-        verify_pipelined_state(:getkq)
-        write_noop
-        response_buffer.reset
-      end
-
-      # Attempt to receive and parse as many key/value pairs as possible
-      # from this server. After #pipeline_response_setup, this should be invoked
-      # repeatedly whenever this server's socket is readable until
-      # #pipeline_complete?.
-      #
-      # Returns a Hash of kv pairs received.
-      def pipeline_next_responses
-        reconnect_on_pipeline_complete!
-        values = {}
-
-        response_buffer.read
-
-        status, cas, key, value = response_buffer.process_single_getk_response
-        # status is not nil only if we have a full response to parse
-        # in the buffer
-        until status.nil?
-          # If the status is ok and key is nil, then this is the response
-          # to the noop at the end of the pipeline
-          finish_pipeline && break if status && key.nil?
-
-          # If the status is ok and the key is not nil, then this is a
-          # getkq response with a value that we want to set in the response hash
-          values[key] = [value, cas] unless key.nil?
-
-          # Get the next response from the buffer
-          status, cas, key, value = response_buffer.process_single_getk_response
-        end
-
-        values
-      rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
-        @connection_manager.error_on_request!(e)
-      end
-
-      # Abort current pipelined get. Generally used to signal an external
-      # timeout during pipelined get.  The underlying socket is
-      # disconnected, and the exception is swallowed.
-      #
-      # Returns nothing.
-      def pipeline_abort
-        response_buffer.clear
-        @connection_manager.abort_request!
-        return true unless connected?
-
-        # Closes the connection, which ensures that our connection
-        # is in a clean state for future requests
-        @connection_manager.error_on_request!('External timeout')
-      rescue NetworkError
-        true
-      end
 
       # Did the last call to #pipeline_response_setup complete successfully?
       def pipeline_complete?
@@ -180,6 +119,22 @@ module Dalli
         raise_down_error unless connected?
       end
 
+      # Abort current pipelined get. Generally used to signal an external
+      # timeout during pipelined get.  The underlying socket is
+      # disconnected, and the exception is swallowed.
+      #
+      # Returns nothing.
+      def pipeline_abort
+        @connection_manager.abort_request!
+        return true unless connected?
+
+        # Closes the connection, which ensures that our connection
+        # is in a clean state for future requests
+        @connection_manager.error_on_request!('External timeout')
+      rescue NetworkError
+        true
+      end
+
       # The socket connection to the underlying server is initialized as a side
       # effect of this call.  In fact, this is the ONLY place where that
       # socket connection is initialized.
@@ -216,30 +171,18 @@ module Dalli
         up!
       end
 
-      def pipelined_get(keys)
+      def pipelined_get_request(keys)
         req = +''
         keys.each do |key|
           req << quiet_get_request(key)
         end
-        # Could send noop here instead of in pipeline_response_setup
+
         write(req)
+        write_noop
       end
 
       def response_buffer
         @response_buffer ||= ResponseBuffer.new(@connection_manager, response_processor)
-      end
-
-      # Called after the noop response is received at the end of a set
-      # of pipelined gets
-      def finish_pipeline
-        response_buffer.clear
-        @connection_manager.finish_request!
-
-        true # to simplify response
-      end
-
-      def reconnect_on_pipeline_complete!
-        @connection_manager.reconnect! 'pipelined get has completed' if pipeline_complete?
       end
 
       def log_marshal_err(key, err)

@@ -95,7 +95,6 @@ module Dalli
     # Fetch multiple keys efficiently.
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
-    # rubocop:disable Metrics/AbcSize
     def get_multi(*keys)
       keys.flatten!
       keys.compact!
@@ -104,15 +103,12 @@ module Dalli
 
       if block_given?
         pipelined_getter.process(keys) { |k, data| yield k, data.first }
-      elsif ring.servers.size == 1
-        pipelined_getter.process(keys)
       else
         {}.tap do |hash|
           pipelined_getter.process(keys) { |k, data| hash[k] = data.first }
         end
       end
     end
-    # rubocop:enable Metrics/AbcSize
 
     ##
     # Fetch multiple keys efficiently, including available metadata such as CAS.

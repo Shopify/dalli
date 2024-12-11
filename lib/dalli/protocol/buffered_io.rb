@@ -27,7 +27,7 @@ module Dalli
       # Reads line from io and the buffer, value does not include the terminator
       def read_line
         fill_buffer(false) if @offset >= @buffer.bytesize
-        until (terminator_index = @buffer.index(TERMINATOR, @offset))
+        until (terminator_index = find_terminator_index)
           fill_buffer(false)
         end
 
@@ -35,6 +35,10 @@ module Dalli
         line = @buffer.byteslice(@offset, terminator_index - @offset)
         @offset = terminator_index
         line.force_encoding(Encoding::UTF_8)
+      end
+
+      def buffered_line?
+        !!find_terminator_index
       end
 
       # Reads the exact number of bytes from the buffer
@@ -68,6 +72,10 @@ module Dalli
       end
 
       private
+
+      def find_terminator_index
+        @buffer.index(TERMINATOR, @offset)
+      end
 
       # rubocop:disable Metrics/AbcSize
       # rubocop:disable Metrics/CyclomaticComplexity

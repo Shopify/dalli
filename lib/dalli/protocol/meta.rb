@@ -48,28 +48,26 @@ module Dalli
         response_processor.consume_all_responses_until_mn
       end
 
-      # rubocop:disable Metrics/AbcSize
-      def read_multi_req(keys)
-        keys.each do |key|
-          @connection_manager.write("mg #{key} v f k q\r\n")
-        end
-        @connection_manager.write("mn\r\n")
-        @connection_manager.flush
-        # read all the memcached responses back and build a hash of key value pairs
+      ##
+      # Returns a hash of key/value pairs from the server. It will only process requests that were retrieved in one
+      # call to the server.
+      ##
+      def pipelined_get_responses
         results = {}
-        while (line = @connection_manager.read_line.chomp!(TERMINATOR)) != ''
-          break if line.start_with?('MN')
-          next unless line.start_with?('VA ')
+        loop do
+          key, value = response_processor.meta_get_or_noop_with_key_and_value
+          # recieved a noop if key is nil
+          if key.nil?
+            @connection_manager.finish_request!
+            break
+          end
 
-          # VA value_length flags key
-          tokens = line.split
-          value = @connection_manager.read(tokens[1].to_i + TERMINATOR.length)
-          results[tokens[3][1..]] =
-            @value_marshaller.retrieve(value.chomp!(TERMINATOR), @response_processor.bitflags_from_tokens(tokens))
+          results[key] = value
+          break if response_processor.buffered_line?
         end
+
         results
       end
-      # rubocop:enable Metrics/AbcSize
 
       # Retrieval Commands
       def get(key, options = nil)

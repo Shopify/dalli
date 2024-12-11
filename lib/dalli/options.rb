@@ -31,19 +31,7 @@ module Dalli
       end
     end
 
-    def pipeline_response_setup
-      @lock.synchronize do
-        super
-      end
-    end
-
-    def pipeline_next_responses
-      @lock.synchronize do
-        super
-      end
-    end
-
-    def pipeline_abort
+    def pipelined_get_responses
       @lock.synchronize do
         super
       end
