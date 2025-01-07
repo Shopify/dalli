@@ -115,7 +115,7 @@ module Dalli
       # corrresponding server here.
       server_map = servers.each_with_object({}) { |s, h| h[s.sock] = s }
 
-      readable, = IO.select(server_map.keys, nil, nil, 100)
+      readable, = IO.select(server_map.keys, nil, nil, timeout)
       return [] if readable.nil?
 
       readable.map { |sock| server_map[sock] }
