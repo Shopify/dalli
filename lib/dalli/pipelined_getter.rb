@@ -96,9 +96,11 @@ module Dalli
 
     # Processes responses from a server.  Returns true if there are no
     # additional responses from this server.
+    #
+    # Yields key/value pairs. Value is an array: [value, cas_id]
     def process_server(server)
-      server.pipelined_get_responses.each_pair do |key, value|
-        yield @key_manager.key_without_namespace(key), value
+      server.pipelined_get_responses.each_pair do |key, value_list|
+        yield @key_manager.key_without_namespace(key), value_list
       end
 
       !server.request_in_progress?

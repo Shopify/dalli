@@ -105,7 +105,8 @@ module Dalli
         pipelined_getter.process(keys, &)
       else
         {}.tap do |hash|
-          pipelined_getter.process(keys) { |k, data| hash[k] = data }
+          # Return Data.first to avoid returning the cas_id.
+          pipelined_getter.process(keys) { |k, data| hash[k] = data.first }
         end
       end
     end

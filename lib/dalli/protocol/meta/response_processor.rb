@@ -63,13 +63,19 @@ module Dalli
           tokens.first == EN ? nil : true
         end
 
-        def meta_get_pipelined_with_key_and_value
+        def meta_get_pipelined_with_key_and_value_and_cas
           tokens = error_on_unexpected!([VA, EN, HD, MN])
           return [nil, nil] if tokens.first == MN
           return [key_from_tokens(tokens), nil] if tokens.first == EN
           return [key_from_tokens(tokens), true] unless tokens.first == VA
 
-          [key_from_tokens(tokens), @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))]
+          [
+            key_from_tokens(tokens),
+            [
+              @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens)),
+              cas_from_tokens(tokens)
+            ]
+          ]
         end
 
         def meta_set_with_cas
