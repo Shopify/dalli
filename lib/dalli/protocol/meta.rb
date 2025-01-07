@@ -58,7 +58,6 @@ module Dalli
         loop do
           key, value = response_processor.meta_get_pipelined_with_key_and_value
           # recieved a noop if key is nil
-          binding.break if $DEBUG
           if key.nil?
             @connection_manager.finish_request!
             break

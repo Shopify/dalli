@@ -19,11 +19,8 @@ module Dalli
       return {} if keys.empty?
 
       @ring.lock do
-        binding.break if $DEBUG
         groups = groups_for_keys(keys)
-        binding.break if $DEBUG
         make_getkq_requests(groups)
-        binding.break if $DEBUG
         servers = groups.keys
         servers = fetch_responses(servers, Time.now, @ring.socket_timeout, &block) until servers.empty?
       end
@@ -52,7 +49,6 @@ module Dalli
 
     def fetch_responses(servers, start_time, timeout, &block)
       # Remove any servers which are not connected
-      binding.break if $DEBUG
       servers.delete_if { |s| !s.connected? }
       return [] if servers.empty?
 

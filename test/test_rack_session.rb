@@ -175,7 +175,6 @@ describe Rack::Session::Dalli do
 
     assert_includes res.body.delete(' '), '"counter"=>1'
     cookie = res['Set-Cookie']
-    puts 'Sleeping to expire session' if $DEBUG
     sleep 4
     res = Rack::MockRequest.new(rsd).get('/', 'HTTP_COOKIE' => cookie)
 
@@ -193,7 +192,6 @@ describe Rack::Session::Dalli do
 
     assert_equal cookie, res['Set-Cookie']
     assert_includes res.body.delete(' '), '"counter"=>2'
-    puts 'Sleeping to expire session' if $DEBUG
     sleep 4
     res = Rack::MockRequest.new(rsd).get('/', 'HTTP_COOKIE' => cookie)
 

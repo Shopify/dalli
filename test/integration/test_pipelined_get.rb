@@ -15,7 +15,6 @@ describe 'Pipelined Get' do
       dc.set('b', 123)
       dc.set('c', %w[a b c])
 
-      $DEBUG = false
       # Invocation without block
       resp = dc.get_multi(%w[a b c d e f])
       expected_resp = { 'a' => 'foo', 'b' => 123, 'c' => %w[a b c] }
@@ -44,8 +43,6 @@ describe 'Pipelined Get' do
 
       assert_equal(1000, result.size)
       assert_equal(50, result['50'])
-    ensure
-      $DEBUG = false
     end
   end
 
