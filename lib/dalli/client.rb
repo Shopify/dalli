@@ -102,7 +102,7 @@ module Dalli
       return {} if keys.empty?
 
       if block_given?
-        pipelined_getter.process(keys, &)
+        pipelined_getter.process(keys) { |k, data| yield k, data.first }
       else
         {}.tap do |hash|
           # Return Data.first to avoid returning the cas_id.
