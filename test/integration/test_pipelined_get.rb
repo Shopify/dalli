@@ -15,6 +15,7 @@ describe 'Pipelined Get' do
       dc.set('b', 123)
       dc.set('c', %w[a b c])
 
+      $DEBUG = false
       # Invocation without block
       resp = dc.get_multi(%w[a b c d e f])
       expected_resp = { 'a' => 'foo', 'b' => 123, 'c' => %w[a b c] }
@@ -43,6 +44,8 @@ describe 'Pipelined Get' do
 
       assert_equal(1000, result.size)
       assert_equal(50, result['50'])
+    ensure
+      $DEBUG = false
     end
   end
 
@@ -128,25 +131,23 @@ describe 'Pipelined Get' do
     end
   end
 
-  describe 'pipeline_next_responses' do
-    it 'raises NetworkError when called before pipeline_response_setup' do
+  describe 'pipelined_get_responses' do
+    it 'raises standard error when called before requests are made' do
       memcached_persistent do |dc|
         server = dc.send(:ring).servers.first
-        server.request(:pipelined_get_request, %w[a b])
-        assert_raises Dalli::NetworkError do
-          server.pipeline_next_responses
+        assert_raises(StandardError, '[Dalli] No request in progress. This may be a bug in Dalli.') do
+          server.pipelined_get_responses
         end
       end
     end
 
-    it 'raises NetworkError when called after pipeline_abort' do
+    it 'raises standard error when called after pipeline_abort' do
       memcached_persistent do |dc|
         server = dc.send(:ring).servers.first
         server.request(:pipelined_get_request, %w[a b])
-        server.pipeline_response_setup
         server.pipeline_abort
-        assert_raises Dalli::NetworkError do
-          server.pipeline_next_responses
+        assert_raises(StandardError, '[Dalli] No request in progress. This may be a bug in Dalli.') do
+          server.pipelined_get_responses
         end
       end
     end

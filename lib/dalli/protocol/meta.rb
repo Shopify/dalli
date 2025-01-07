@@ -56,15 +56,26 @@ module Dalli
         verify_pipelined_state
         results = {}
         loop do
-          key, value = response_processor.meta_get_or_noop_with_key_and_value
+          key, value = response_processor.meta_get_pipelined_with_key_and_value
           # recieved a noop if key is nil
+          binding.break if $DEBUG
           if key.nil?
             @connection_manager.finish_request!
             break
           end
 
           results[key] = value
-          break if response_processor.buffered_line?
+          # This is a bit of a hack. This is just checking if there is more data that has already been
+          # read from the socket. However, we don't actually know if there is more data to read because we could just
+          # have the header with the \r\n but no body. Instead, we probably should just be calling this method
+          # in the pipelined getter, and checking if:
+          # 1. There is a socket readable
+          # OR
+          # 2. There is a server that has not yet found an MN
+          #
+          # We may need to split this up into:
+          # Fill buffer, then try executing the pipelined get responses
+          break unless @connection_manager.buffered_line?
         end
 
         results

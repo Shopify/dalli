@@ -95,17 +95,17 @@ module Dalli
     # Fetch multiple keys efficiently.
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
-    def get_multi(*keys)
+    def get_multi(*keys, &)
       keys.flatten!
       keys.compact!
 
       return {} if keys.empty?
 
       if block_given?
-        pipelined_getter.process(keys) { |k, data| yield k, data.first }
+        pipelined_getter.process(keys, &)
       else
         {}.tap do |hash|
-          pipelined_getter.process(keys) { |k, data| hash[k] = data.first }
+          pipelined_getter.process(keys) { |k, data| hash[k] = data }
         end
       end
     end

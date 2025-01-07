@@ -18,7 +18,8 @@ module Dalli
 
       def_delegators :@value_marshaller, :serializer, :compressor, :compression_min_size, :compress_by_default?
       def_delegators :@connection_manager, :name, :sock, :hostname, :port, :close, :connected?, :socket_timeout,
-                     :socket_type, :up!, :down!, :write, :reconnect_down_server?, :raise_down_error, :request_in_progress?
+                     :socket_type, :up!, :down!, :write, :reconnect_down_server?, :raise_down_error,
+                     :request_in_progress?
 
       def initialize(attribs, client_options = {})
         hostname, port, socket_type, @weight, user_creds = ServerConfigParser.parse(attribs)

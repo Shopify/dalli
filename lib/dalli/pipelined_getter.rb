@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'debug'
+
 module Dalli
   ##
   # Contains logic for the pipelined gets implemented by the client.
@@ -17,8 +19,12 @@ module Dalli
       return {} if keys.empty?
 
       @ring.lock do
+        binding.break if $DEBUG
         groups = groups_for_keys(keys)
+        binding.break if $DEBUG
         make_getkq_requests(groups)
+        binding.break if $DEBUG
+        servers = groups.keys
         servers = fetch_responses(servers, Time.now, @ring.socket_timeout, &block) until servers.empty?
       end
     rescue NetworkError => e
@@ -46,6 +52,7 @@ module Dalli
 
     def fetch_responses(servers, start_time, timeout, &block)
       # Remove any servers which are not connected
+      binding.break if $DEBUG
       servers.delete_if { |s| !s.connected? }
       return [] if servers.empty?
 
@@ -112,7 +119,7 @@ module Dalli
       # corrresponding server here.
       server_map = servers.each_with_object({}) { |s, h| h[s.sock] = s }
 
-      readable, = IO.select(server_map.keys, nil, nil, timeout)
+      readable, = IO.select(server_map.keys, nil, nil, 100)
       return [] if readable.nil?
 
       readable.map { |sock| server_map[sock] }

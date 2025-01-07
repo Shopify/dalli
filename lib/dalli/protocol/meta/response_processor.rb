@@ -69,6 +69,7 @@ module Dalli
           return [key_from_tokens(tokens), nil] if tokens.first == EN
           return [key_from_tokens(tokens), true] unless tokens.first == VA
 
+          binding.break if $DEBUG
           [key_from_tokens(tokens), @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))]
         end
 

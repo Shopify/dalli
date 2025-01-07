@@ -31,8 +31,6 @@ module Dalli
       attr_accessor :hostname, :port, :socket_type, :options
       attr_reader :sock
 
-      def_delegators :buffered_io, :buffered_line?
-
       def initialize(hostname, port, socket_type, client_options)
         @hostname = hostname
         @port = port
@@ -262,6 +260,10 @@ module Dalli
 
         time = Time.now - @down_at
         Dalli.logger.warn { format('%<name>s is back (downtime was %<time>.3f seconds)', name: name, time: time) }
+      end
+
+      def buffered_line?
+        @buffered_io.buffered_line?
       end
     end
   end
