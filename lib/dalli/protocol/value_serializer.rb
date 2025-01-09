@@ -11,6 +11,7 @@ module Dalli
     class ValueSerializer
       DEFAULTS = {
         raw: false,
+        cache_nils: false,
         serializer: Marshal
       }.freeze
 
@@ -29,7 +30,15 @@ module Dalli
 
       def store(value, req_options, bitflags)
         do_serialize = serialize_value?(req_options)
-        store_value = do_serialize ? serialize_value(value) : value.to_s
+        store_value = if value.nil?
+          if @serialization_options[:cache_nils]
+            value.to_s
+          else
+            raise ArgumentError, "value cannot be nil unless cache_nils option is enabled"
+          end
+        else
+          do_serialize ? serialize_value(value) : value.to_s
+        end
         bitflags |= FLAG_SERIALIZED if do_serialize
         [store_value, bitflags]
       end
