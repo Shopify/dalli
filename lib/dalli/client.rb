@@ -431,6 +431,7 @@ module Dalli
 
       op, key, *args = all_args
 
+      puts "perform: #{op}" if $DEBUG
       key = key.to_s
       key = @key_manager.validate_key(key)
 

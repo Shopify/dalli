@@ -29,6 +29,7 @@ module Dalli
 
       # Chokepoint method for error handling and ensuring liveness
       def request(opkey, *args)
+        puts "request: #{opkey}" if $DEBUG
         verify_state(opkey)
 
         begin

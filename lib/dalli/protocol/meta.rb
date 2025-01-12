@@ -50,6 +50,7 @@ module Dalli
 
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
+        puts 'read multi req' if $DEBUG
         keys.each do |key|
           @connection_manager.write("mg #{key} v f k q\r\n")
         end

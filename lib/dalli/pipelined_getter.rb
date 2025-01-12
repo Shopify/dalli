@@ -11,6 +11,7 @@ module Dalli
     end
 
     def optimized_for_single_server(keys)
+      puts "OPTIMIZE FOR SINGLE SERVER GET"
       keys.map! { |a| @key_manager.validate_key(a.to_s) }
       results = @ring.servers.first.request(:read_multi_req, keys)
       @key_manager.key_values_without_namespace(results)
