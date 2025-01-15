@@ -27,12 +27,12 @@ describe 'Pipelined Get' do
     end
   end
 
-  it 'pipelined set handles network errors' do
+  it 'pipelined set raises network errors' do
     memcached_persistent do |dc|
       dc.close
       dc.flush
     end
-    toxi_memcached_persistent do |dc|
+    toxi_memcached_persistent(19_997, '', { down_retry_delay: 0 }) do |dc|
       dc.close
       dc.flush
 
@@ -41,10 +41,13 @@ describe 'Pipelined Get' do
       assert_empty(resp)
 
       pairs = { 'a' => 'foo', 'b' => 123, 'c' => 'raw' }
+
       Toxiproxy[/dalli_memcached/].down do
-        dc.set_multi(pairs, 60, raw: true)
+        assert_raises Dalli::NetworkError do
+          dc.set_multi(pairs, 60, raw: true)
+        end
       end
-      # Invocation without block
+      # Invocation without block should reconnect and not have set any keys
       resp = dc.get_multi(%w[a b c d e f])
       expected_resp = {}
 
