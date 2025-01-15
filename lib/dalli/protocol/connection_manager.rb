@@ -12,7 +12,6 @@ module Dalli
     # Manages the socket connection to the server, including ensuring liveness
     # and retries.
     ##
-    # rubocop:disable Metrics/ClassLength
     class ConnectionManager
       DEFAULTS = {
         # seconds between trying to contact a remote server
@@ -24,9 +23,7 @@ module Dalli
         # amount of time to sleep between retries when a failure occurs
         socket_failure_delay: 0.1,
         # Set keepalive
-        keepalive: true,
-        # chunk size for buffered io
-        chunk_size: 1024 * 4
+        keepalive: true
       }.freeze
 
       attr_accessor :hostname, :port, :socket_type, :options
@@ -40,7 +37,6 @@ module Dalli
         @request_in_progress = false
         @sock = nil
         @pid = nil
-        @buffered_io = nil
 
         reset_down_info
       end
@@ -57,7 +53,6 @@ module Dalli
         Dalli.logger.debug { "Dalli::Server#connect #{name}" }
 
         @sock = memcached_socket
-        @buffered_io = BufferedIO.new(@sock, options[:chunk_size], options[:socket_timeout])
         @pid = PIDCache.pid
         @request_in_progress = false
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError, SocketError => e
@@ -123,7 +118,6 @@ module Dalli
           nil
         end
         @sock = nil
-        @buffered_io = nil
         @pid = nil
         abort_request!
       end
@@ -276,5 +270,4 @@ module Dalli
       end
     end
   end
-  # rubocop:enable Metrics/ClassLength
 end
