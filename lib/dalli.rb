@@ -12,6 +12,9 @@ module Dalli
   # socket/server communication error
   class NetworkError < DalliError; end
 
+  # socket/server communication error, but we should retry
+  class RetryableNetworkError < NetworkError; end
+
   # no server available/alive error
   class RingError < DalliError; end
 

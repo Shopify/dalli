@@ -36,7 +36,7 @@ module Dalli
       else
         optimized_for_single_server(keys)
       end
-    rescue NetworkError => e
+    rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying pipelined gets because of timeout' }
       retry
@@ -127,7 +127,7 @@ module Dalli
       servers
     rescue NetworkError
       # Abort and raise if we encountered a network error.  This triggers
-      # a retry at the top level.
+      # a retry at the top level on RetryableNetworkError
       abort_without_timeout(servers)
       raise
     end
