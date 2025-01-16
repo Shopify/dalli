@@ -14,10 +14,6 @@ module Dalli
       keys.map! { |a| @key_manager.validate_key(a.to_s) }
       results = @ring.servers.first.request(:read_multi_req, keys)
       @key_manager.key_values_without_namespace(results)
-    rescue NetworkError => e
-      Dalli.logger.debug { e.inspect }
-      Dalli.logger.debug { 'bailing on pipelined gets because of timeout' }
-      {}
     end
 
     ##
@@ -36,7 +32,7 @@ module Dalli
       else
         optimized_for_single_server(keys)
       end
-    rescue NetworkError => e
+    rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying pipelined gets because of timeout' }
       retry
@@ -127,7 +123,7 @@ module Dalli
       servers
     rescue NetworkError
       # Abort and raise if we encountered a network error.  This triggers
-      # a retry at the top level.
+      # a retry at the top level on RetryableNetworkError
       abort_without_timeout(servers)
       raise
     end

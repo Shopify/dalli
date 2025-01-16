@@ -11,6 +11,7 @@ require 'dalli'
 require 'logger'
 require 'securerandom'
 require 'toxiproxy'
+require 'debug'
 
 Dalli.logger = Logger.new($stdout)
 Dalli.logger.level = Logger::ERROR

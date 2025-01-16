@@ -75,8 +75,8 @@ describe 'Pipelined Get' do
     end
   end
 
-  it 'handles network errors' do
-    toxi_memcached_persistent do |dc|
+  it 'raises network errors' do
+    toxi_memcached_persistent(19_997, '', { down_retry_delay: 0 }) do |dc|
       dc.close
       dc.flush
 
@@ -89,11 +89,14 @@ describe 'Pipelined Get' do
       dc.set('c', %w[a b c])
 
       Toxiproxy[/dalli_memcached/].down do
-        resp = dc.get_multi(%w[a b c d e f])
-        expected_resp = {}
-
-        assert_equal(expected_resp, resp)
+        assert_raises Dalli::NetworkError do
+          dc.get_multi(%w[a b c d e f])
+        end
       end
+
+      val = dc.get_multi(%w[a b c d e f])
+
+      assert_equal({ 'a' => 'foo', 'b' => 123, 'c' => %w[a b c] }, val)
     end
   end
 

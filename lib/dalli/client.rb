@@ -436,7 +436,7 @@ module Dalli
 
       server = ring.server_for_key(key)
       server.request(op, key, *args)
-    rescue NetworkError => e
+    rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying request with new server' }
       retry

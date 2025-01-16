@@ -21,9 +21,10 @@ module Dalli
       raise 'not yet implemented' unless @ring.servers.length == 1
 
       @ring.servers.first.request(:write_multi_storage_req, :set, pairs, ttl, 0, req_options)
-    rescue NetworkError => e
+    rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
-      Dalli.logger.debug { 'bailing on pipelined set because of timeout' }
+      Dalli.logger.debug { 'retrying pipelined set because of timeout' }
+      retry
     end
   end
 end
