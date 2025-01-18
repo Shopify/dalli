@@ -7,7 +7,6 @@ module Dalli
   class PipelinedSetter
     def initialize(ring, key_manager)
       @ring = ring
-      @key_manager = key_manager
     end
 
     ##
