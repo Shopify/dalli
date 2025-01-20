@@ -5,9 +5,8 @@ module Dalli
   # Contains logic for the pipelined sets implemented by the client.
   ##
   class PipelinedSetter
-    def initialize(ring, key_manager)
+    def initialize(ring)
       @ring = ring
-      @key_manager = key_manager
     end
 
     ##

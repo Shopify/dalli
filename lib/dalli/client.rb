@@ -454,7 +454,7 @@ module Dalli
     end
 
     def pipelined_setter
-      PipelinedSetter.new(ring, @key_manager)
+      PipelinedSetter.new(ring)
     end
   end
 end
