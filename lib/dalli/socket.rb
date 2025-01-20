@@ -154,7 +154,6 @@ module Dalli
         end
       end
     else
-
       ##
       # UNIX represents a UNIX domain socket, which is an interprocess communication
       # mechanism between processes on the same host.  Used when the Memcached server
@@ -171,8 +170,15 @@ module Dalli
           Timeout.timeout(options[:socket_timeout]) do
             sock = new(path)
             sock.options = { path: path }.merge(options)
+            init_socket_options(sock, options)
             sock
           end
+        end
+
+        def self.init_socket_options(sock, options)
+          # Following the options supported in https://man7.org/linux/man-pages/man7/unix.7.html
+          sock.setsockopt(::Socket::SOL_SOCKET, ::Socket::SO_SNDBUF, options[:sndbuf]) if options[:sndbuf]
+          sock.timeout = options[:socket_timeout] if options[:socket_timeout] && sock.respond_to?(:timeout=)
         end
       end
     end
