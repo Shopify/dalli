@@ -24,7 +24,7 @@ module Dalli
 
       def initialize(protocol_options)
         @serialization_options =
-          DEFAULTS.merge(protocol_options.select { |k, _| OPTIONS.include?(k) })
+          DEFAULTS.merge(protocol_options.slice(*OPTIONS))
       end
 
       def store(value, req_options, bitflags)
