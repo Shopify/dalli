@@ -244,7 +244,9 @@ module Dalli
         end
 
         def read_data(data_size)
-          @io_source.read(data_size + TERMINATOR.bytesize)&.chomp!(TERMINATOR)
+          resp_data = @io_source.read(data_size)
+          @io_source.read(TERMINATOR.bytesize)
+          resp_data
         end
       end
     end
