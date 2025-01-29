@@ -13,6 +13,7 @@ module Dalli
     ##
     class Meta < Base
       TERMINATOR = "\r\n"
+      SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
       def response_processor
         @response_processor ||= ResponseProcessor.new(@connection_manager, @value_marshaller)
@@ -51,9 +52,7 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
         # Pre-allocate the results hash with expected size
-        # NOTE: below is an optimization for Ruby 3.4, but we need a performant runtime check or deprecate
-        # results = {Hash.new(nil, capacity: keys.size)
-        results = {}
+        results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
 
         keys.each do |key|
           @connection_manager.write("mg #{key} v f k q\r\n")

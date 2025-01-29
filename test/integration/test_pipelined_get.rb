@@ -75,6 +75,37 @@ describe 'Pipelined Get' do
     end
   end
 
+  it 'meta read_multi_req supports pipelined get doesnt default value on misses' do
+    memcached_persistent do |_, port|
+      dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace')
+      dc.close
+      dc.flush
+
+      keys_to_query = %w[a b]
+
+      resp = dc.get_multi(keys_to_query)
+
+      assert_empty(resp)
+
+      dc.set('a', 'foo')
+
+      # Invocation without block
+      resp = dc.get_multi(keys_to_query)
+      expected_resp = { 'a' => 'foo' }
+
+      assert_nil(resp['b'])
+      assert_equal(expected_resp, resp)
+
+      # Invocation with block
+      dc.get_multi(keys_to_query) do |k, v|
+        assert(expected_resp.key?(k) && expected_resp[k] == v)
+        expected_resp.delete(k)
+      end
+
+      assert_empty expected_resp
+    end
+  end
+
   it 'raises network errors' do
     toxi_memcached_persistent(19_997, '', { down_retry_delay: 0 }) do |dc|
       dc.close
