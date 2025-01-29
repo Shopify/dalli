@@ -51,7 +51,9 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
         # Pre-allocate the results hash with expected size
-        results = Hash.new(keys.size)
+        # NOTE: below is an optimization for Ruby 3.4, but we need a performant runtime check or deprecate
+        # results = {Hash.new(nil, capacity: keys.size)
+        results = {}
 
         keys.each do |key|
           @connection_manager.write("mg #{key} v f k q\r\n")
