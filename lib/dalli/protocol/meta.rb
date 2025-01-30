@@ -13,6 +13,7 @@ module Dalli
     ##
     class Meta < Base
       TERMINATOR = "\r\n"
+      SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
       def response_processor
         @response_processor ||= ResponseProcessor.new(@connection_manager, @value_marshaller)
@@ -50,22 +51,26 @@ module Dalli
 
       # rubocop:disable Metrics/AbcSize
       def read_multi_req(keys)
+        # Pre-allocate the results hash with expected size
+        results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
+
         keys.each do |key|
           @connection_manager.write("mg #{key} v f k q\r\n")
         end
         @connection_manager.write("mn\r\n")
         @connection_manager.flush
-        # read all the memcached responses back and build a hash of key value pairs
-        results = {}
-        while (line = @connection_manager.readline.chomp!(TERMINATOR)) != ''
-          break if line.start_with?('MN')
-          next unless line.start_with?('VA ')
+
+        terminator_length = TERMINATOR.length
+        while (line = @connection_manager.readline)
+          break if line == TERMINATOR || line[0, 2] == 'MN'
+          next unless line[0, 3] == 'VA '
 
           # VA value_length flags key
           tokens = line.split
-          value = @connection_manager.read_exact(tokens[1].to_i + TERMINATOR.length)
-          results[tokens[3][1..]] =
-            @value_marshaller.retrieve(value.chomp!(TERMINATOR), @response_processor.bitflags_from_tokens(tokens))
+          value = @connection_manager.read_exact(tokens[1].to_i)
+          @connection_manager.read_exact(terminator_length) # read the terminator
+          results[tokens[3].byteslice(1..-1)] =
+            @value_marshaller.retrieve(value, @response_processor.bitflags_from_tokens(tokens))
         end
         results
       end
