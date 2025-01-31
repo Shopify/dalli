@@ -28,10 +28,10 @@ module Dalli
 
         def self.meta_set(key:, value:, bitflags: nil, cas: nil, ttl: nil, mode: :set, base64: false, quiet: false)
           cmd = "ms #{key} #{value.bytesize}"
-          cmd << ' c' unless %i[append prepend].include?(mode)
+          cmd << ' c' if !quiet && !%i[append prepend].include?(mode)
           cmd << ' b' if base64
           cmd << " F#{bitflags}" if bitflags
-          cmd << cas_string(cas)
+          cmd << cas_string(cas) if cas
           cmd << " T#{ttl}" if ttl
           cmd << " M#{mode_to_token(mode)}"
           cmd << ' q' if quiet

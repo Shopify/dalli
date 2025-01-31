@@ -28,6 +28,7 @@ module Dalli
       def write_multi_storage_req(_mode, pairs, ttl = nil, _cas = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
 
+        fire_forget = options&.key?(:fire_forget) ? options.delete(:fire_forget) : false
         pairs.each do |key, raw_value|
           (value, bitflags) = @value_marshaller.store(key, raw_value, options)
           encoded_key, _base64 = KeyRegularizer.encode(key)
@@ -39,14 +40,14 @@ module Dalli
           # * socket write each piece indepentantly to avoid extra allocation
           # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
           # * avoids using the request formatter pattern for single inline builder
-          @connection_manager.write("ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q\r\n")
+          @connection_manager.write("ms #{encoded_key} #{value_bytesize} F#{bitflags} T#{ttl} MS q\r\n")
           @connection_manager.write(value)
           @connection_manager.write(TERMINATOR)
         end
         write_noop
         @connection_manager.flush
 
-        response_processor.consume_all_responses_until_mn
+        response_processor.consume_all_responses_until_mn unless fire_forget
       end
 
       # rubocop:disable Metrics/AbcSize
@@ -125,8 +126,21 @@ module Dalli
 
       # Storage Commands
       def set(key, value, ttl, cas, options)
-        write_storage_req(:set, key, value, ttl, cas, options)
-        response_processor.meta_set_with_cas unless quiet?
+        simple_set = options&.key?(:simple_set) ? options.delete(:simple_set) : false
+        if simple_set
+          # NOTE: simple_set doesn't suppport a number of options and has simplified serialization
+          # it results in 2x faster write throughput
+          (value, _bitflags) = @value_marshaller.store(key, value, options)
+          ttl = TtlSanitizer.sanitize(ttl) if ttl
+          encoded_key, _base64 = KeyRegularizer.encode(key)
+          write("ms #{encoded_key} #{value.bytesize} T#{ttl} MSq\r\n")
+          write(value)
+          write("\r\n")
+          noop
+        else
+          write_storage_req(:set, key, value, ttl, cas, options)
+          response_processor.meta_set_with_cas unless quiet?
+        end
       end
 
       def add(key, value, ttl, options)
