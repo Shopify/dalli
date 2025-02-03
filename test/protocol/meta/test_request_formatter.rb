@@ -89,13 +89,13 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     end
 
     it 'sets the quiet mode if configured' do
-      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS q\r\n#{val}\r\n",
+      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS q\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_set(key: key, value: val, bitflags: bitflags,
                                                                     quiet: true)
     end
 
     it 'sets the base64 mode if configured' do
-      assert_equal "ms #{key} #{val.bytesize} c b F#{bitflags} MS\r\n#{val}\r\n",
+      assert_equal "ms #{key} #{val.bytesize} c b F#{bitflags} MS\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_set(key: key, value: val, bitflags: bitflags,
                                                                     base64: true)
     end

@@ -77,17 +77,25 @@ module Dalli
       # rubocop:enable Metrics/AbcSize
 
       # Retrieval Commands
+      # rubocop:disable Metrics/AbcSize
       def get(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        req = RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_flag_options(options))
-        write(req)
-        if meta_flag_options(options)
+        meta_options = meta_flag_options(options)
+        if !meta_options && !base64
+          write("mg #{encoded_key} v\r\n")
+        else
+          write(RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_options))
+        end
+        if !meta_options && !base64
+          response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+        elsif meta_options
           response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
         else
           response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
         end
       end
 
+      # rubocop:enable Metrics/AbcSize
       def quiet_get_request(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
         RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true)
@@ -148,6 +156,9 @@ module Dalli
                                         bitflags: bitflags, cas: cas,
                                         ttl: ttl, mode: mode, quiet: quiet?, base64: base64)
         write(req)
+        write(value)
+        write(TERMINATOR)
+        @connection_manager.flush
       end
       # rubocop:enable Metrics/ParameterLists
 

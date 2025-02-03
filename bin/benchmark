@@ -14,7 +14,7 @@ gemfile do
   source 'https://rubygems.org'
   gem 'dalli'
   gem 'benchmark-ips'
-  gem 'logger', '=1.6.1'
+  gem 'logger'
 end
 
 require 'dalli'
@@ -43,7 +43,6 @@ bench_target = ENV['BENCH_TARGET'] || 'set'
 bench_time = (ENV['BENCH_TIME'] || 10).to_i
 bench_warmup = (ENV['BENCH_WARMUP'] || 3).to_i
 bench_payload_size = (ENV['BENCH_PAYLOAD_SIZE'] || 700_000).to_i
-TERMINATOR = "\r\n"
 puts "yjit: #{RubyVM::YJIT.enabled?}"
 
 client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)

@@ -49,6 +49,8 @@ module Dalli
         !WAIT_RCS.include?(result)
       end
 
+      # NOTE: this is blocking, we want to move to non-blocking IO
+      # and use IO.select to wait for the socket to be readable
       def read_nonblock_timed_out?(result)
         result == :wait_readable && !wait_readable(options[:socket_timeout])
       end

@@ -14,7 +14,7 @@ gemfile do
   gem 'dalli'
   gem 'benchmark-ips'
   gem 'vernier'
-  gem 'logger', '=1.6.1'
+  gem 'logger'
 end
 
 require 'dalli'
