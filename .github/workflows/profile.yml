@@ -16,7 +16,6 @@ jobs:
         chmod +x ./install_memcached.sh
         ./install_memcached.sh
         memcached -d
-        memcached -d -p 11222
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
       with:
