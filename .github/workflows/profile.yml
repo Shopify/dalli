@@ -31,3 +31,5 @@ jobs:
         path: |
           client_get_profile.json
           socket_get_profile.json
+          client_set_profile.json
+          socket_set_profile.json
