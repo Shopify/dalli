@@ -15,16 +15,6 @@ module Dalli
     module InstanceMethods
       WAIT_RCS = %i[wait_writable wait_readable].freeze
 
-      def readfull(count)
-        value = String.new(capacity: count + 1)
-        loop do
-          result = read_nonblock(count - value.bytesize, exception: false)
-          value << result if append_to_buffer?(result)
-          break if value.bytesize == count
-        end
-        value
-      end
-
       def read_available
         value = +''
         loop do
