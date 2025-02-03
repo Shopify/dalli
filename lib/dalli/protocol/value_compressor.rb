@@ -35,7 +35,7 @@ module Dalli
         end
 
         @compression_options =
-          DEFAULTS.merge(client_options.select { |k, _| OPTIONS.include?(k) })
+          DEFAULTS.merge(client_options.slice(*OPTIONS))
       end
 
       def store(value, req_options, bitflags)
