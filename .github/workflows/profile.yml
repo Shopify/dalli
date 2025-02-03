@@ -32,3 +32,7 @@ jobs:
           socket_get_profile.json
           client_set_profile.json
           socket_set_profile.json
+          client_get_multi_profile.json
+          socket_get_multi_profile.json
+          client_set_multi_profile.json
+          socket_set_multi_profile.json
