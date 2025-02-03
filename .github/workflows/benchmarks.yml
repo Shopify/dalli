@@ -8,6 +8,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install Memcached 1.6.23
+      working-directory: scripts
+      env:
+        MEMCACHED_VERSION: 1.6.23
+      run: |
+        chmod +x ./install_memcached.sh
+        ./install_memcached.sh
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
       with:
