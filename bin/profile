@@ -104,7 +104,7 @@ def sock_get_multi(sock, pairs)
   results
 end
 
-if bench_target == 'get'
+if %w[all get].include?(bench_target)
   Vernier.profile(out: 'client_get_profile.json') do
     start_time = Time.now
     client.get(dalli_key) while Time.now - start_time < bench_time
@@ -118,5 +118,22 @@ if bench_target == 'get'
       sock.read(payload.bytesize)
     end
   end
-  exit 0
+end
+
+if %w[all set].include?(bench_target)
+  Vernier.profile(out: 'client_set_profile.json') do
+    start_time = Time.now
+    client.set(dalli_key, payload, 3600, raw: true) while Time.now - start_time < bench_time
+  end
+
+  Vernier.profile(out: 'socket_set_profile.json') do
+    start_time = Time.now
+    while Time.now - start_time < bench_time
+      sock.write("set sock_key 0 3600 #{payload.bytesize}\r\n")
+      sock.write(payload)
+      sock.write(TERMINATOR)
+      sock.flush
+      sock.readline # clear the buffer
+    end
+  end
 end
