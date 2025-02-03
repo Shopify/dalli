@@ -107,7 +107,6 @@ if %w[all get].include?(bench_target)
     start_time = Time.now
     client.get(dalli_key) while Time.now - start_time < bench_time
   end
-  exit 0 # TODO: profiling segfaulted CI?
 
   Vernier.profile(out: 'socket_get_profile.json') do
     start_time = Time.now
