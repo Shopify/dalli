@@ -13,12 +13,13 @@ gemfile do
   source 'https://rubygems.org'
   gem 'dalli'
   gem 'benchmark-ips'
-  gem 'stackprof'
+  gem 'vernier'
+  gem 'logger'
 end
 
 require 'dalli'
 require 'benchmark/ips'
-require 'stackprof'
+require 'vernier'
 
 ##
 # StringSerializer is a serializer that avoids the overhead of Marshal or JSON.
@@ -33,70 +34,89 @@ class StringSerializer
   end
 end
 
-client = Dalli::Client.new('localhost', compress: false)
-meta_client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
-string_client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
+dalli_url = ENV['BENCH_CACHE_URL'] || "127.0.0.1:11211"
 
-payload = 'B' * 1_000_000
-client.set('key', payload)
-string_client.set('string_key', payload)
-meta_client.set('meta_key', payload)
-
-payload_fifty = 'B' * 50_000
-keys = {}
-100.times do |i|
-  keys["multi_#{i}"] = payload_fifty
+if dalli_url.include?('unix')
+  ENV['BENCH_CACHE_URL'].gsub('unix://','')
 end
+bench_target = ENV['BENCH_TARGET'] || 'get'
+bench_time = (ENV['BENCH_TIME'] || 10).to_i
+bench_payload_size = (ENV['BENCH_PAYLOAD_SIZE'] || 700_000).to_i
+TERMINATOR = "\r\n"
+puts "yjit: #{RubyVM::YJIT.enabled?}"
 
-# ensure theres is data for get calls
+client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
+multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false)
+
+# The raw socket implementation is used to benchmark the performance of dalli & the overhead of the various abstractions
+# in the library.
+sock = TCPSocket.new('127.0.0.1', '11211', connect_timeout: 1)
+sock.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, true)
+sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
+# Benchmarks didn't see any performance gains from increasing the SO_RCVBUF buffer size
+# sock.setsockopt(Socket::SOL_SOCKET, ::Socket::SO_RCVBUF, 1024 * 1024 * 8)
+# Benchamrks did see an improvement in performance when increasing the SO_SNDBUF buffer size
+sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_SNDBUF, 1024 * 1024 * 8)
+
+payload = 'B' * bench_payload_size
+dalli_key = 'dalli_key'
+# ensure the clients are all connected and working
+client.set(dalli_key, payload)
+sock.write("set sock_key 0 3600 #{payload.bytesize}\r\n")
+sock.write(payload)
+sock.write(TERMINATOR)
+sock.flush
+sock.readline # clear the buffer
+
+# ensure we have basic data for the benchmarks and get calls
+payload_smaller = 'B' * 50_000
+pairs = {}
+100.times do |i|
+  pairs["multi_#{i}"] = payload_smaller
+end
 client.quiet do
-  keys.each do |key, value|
+  pairs.each do |key, value|
     client.set(key, value, 3600, raw: true)
   end
 end
 
-profile_job = ENV['PROFILE_JOB'] || 'set_multi'
-method_name = ''
+def sock_get_multi(sock, pairs)
+  count = pairs.length
+  pairs.each_key do |key|
+    count -= 1
+    tail = count.zero? ? '' : 'q'
+    sock.write("mg #{key} v f k #{tail}\r\n")
+  end
+  sock.flush
+  # read all the memcached responses back and build a hash of key value pairs
+  results = {}
+  last_result = false
+  while (line = sock.readline.chomp!(TERMINATOR)) != ''
+    last_result = true if line.start_with?('EN ')
+    next unless line.start_with?('VA ') || last_result
 
-case profile_job
-when 'get_multi'
-  profile = StackProf.run(mode: :wall, interval: 1_000) do
-    5_000.times do
-      meta_client.get_multi(keys.keys)
-    end
+    _, value_length, _flags, key = line.split
+    value = sock.read(value_length.to_i + TERMINATOR.length)
+    results[key[1..]] = value.chomp!(0..-TERMINATOR.length)
+    break if results.size == pairs.size
+    break if last_result
   end
-  method_name = /Dalli::Client#get_multi/
-when 'get_single'
-  profile = StackProf.run(mode: :wall, interval: 1_000) do
-    25_000.times do
-      keys.each_key do |key|
-        meta_client.get(key)
-      end
-    end
-  end
-  method_name = /Dalli::Client#get/
-when 'set_single'
-  profile = StackProf.run(mode: :wall, interval: 1_000) do
-    5_000.times do
-      client.quiet do
-        keys.each do |key, value|
-          client.set(key, value, 3600, raw: true)
-        end
-      end
-    end
-  end
-  method_name = /Dalli::Client#set/
-else
-  profile = StackProf.run(mode: :wall, interval: 1_000) do
-    5_000.times do
-      meta_client.set_multi(keys, 3600, raw: true)
-    end
-  end
-  method_name = /Dalli::Client#set_multi/
+  results
 end
 
-result = StackProf::Report.new(profile)
-puts
-result.print_text
-puts "\n\n\n"
-result.print_method(method_name)
+if bench_target == 'get'
+  Vernier.profile(out: 'client_get_profile.json') do
+    start_time = Time.now
+    client.get(dalli_key) while Time.now - start_time < bench_time
+  end
+
+  Vernier.profile(out: 'socket_get_profile.json') do
+    start_time = Time.now
+    while Time.now - start_time < bench_time do
+      sock.write("get sock_key\r\n")
+      sock.readline
+      sock.read(payload.bytesize)
+    end
+  end
+  exit 0
+end
