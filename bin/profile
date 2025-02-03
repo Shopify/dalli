@@ -45,7 +45,6 @@ TERMINATOR = "\r\n"
 puts "yjit: #{RubyVM::YJIT.enabled?}"
 
 client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
-multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false)
 
 # The raw socket implementation is used to benchmark the performance of dalli & the overhead of the various abstractions
 # in the library.
@@ -102,12 +101,6 @@ def sock_get_multi(sock, pairs)
   end
   results
 end
-
-Vernier.profile(out: 'ruby_profile.json') do
-  start_time = Time.now
-  a = "hi" while Time.now - start_time < bench_time
-end
-exit 0
 
 if %w[all get].include?(bench_target)
   Vernier.profile(out: 'client_get_profile.json') do
