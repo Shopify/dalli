@@ -22,9 +22,12 @@ module Dalli
       def_delegators :@value_serializer, :serializer
       def_delegators :@value_compressor, :compressor, :compression_min_size, :compress_by_default?
 
+      attr_reader :raw_by_default
+
       def initialize(client_options)
         @value_serializer = ValueSerializer.new(client_options)
         @value_compressor = ValueCompressor.new(client_options)
+        @raw_by_default = client_options[:raw] || false
 
         @marshal_options =
           DEFAULTS.merge(client_options.slice(*OPTIONS))

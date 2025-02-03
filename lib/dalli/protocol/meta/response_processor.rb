@@ -28,12 +28,16 @@ module Dalli
           @value_marshaller = value_marshaller
         end
 
-        def meta_get_with_value(cache_nils: false)
+        def meta_get_with_value(cache_nils: false, skip_flags: false)
           tokens = error_on_unexpected!([VA, EN, HD])
           return cache_nils ? ::Dalli::NOT_FOUND : nil if tokens.first == EN
           return true unless tokens.first == VA
 
-          @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
+          if skip_flags
+            @value_marshaller.retrieve(read_data(tokens[1].to_i), 0)
+          else
+            @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
+          end
         end
 
         def meta_get_with_value_and_cas

@@ -43,11 +43,13 @@ bench_time = (ENV['BENCH_TIME'] || 10).to_i
 bench_warmup = (ENV['BENCH_WARMUP'] || 3).to_i
 bench_payload_size = (ENV['BENCH_PAYLOAD_SIZE'] || 700_000).to_i
 TERMINATOR = "\r\n"
+payload = 'B' * bench_payload_size
+
 puts "yjit: #{RubyVM::YJIT.enabled?}"
 
-client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
-multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false)
-string_client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
+client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false, raw: true)
+multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false, raw: true)
+
 # The raw socket implementation is used to benchmark the performance of dalli & the overhead of the various abstractions
 # in the library.
 sock = TCPSocket.new('127.0.0.1', '11211', connect_timeout: 1)
@@ -58,12 +60,8 @@ sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
 # Benchamrks did see an improvement in performance when increasing the SO_SNDBUF buffer size
 sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_SNDBUF, 1024 * 1024 * 8)
 
-TERMINATOR = "\r\n"
-payload = 'B' * bench_payload_size
-
 # ensure the clients are all connected and working
 client.set('key', payload)
-string_client.set('string_key', payload)
 sock.write("set sock_key 0 3600 #{payload.bytesize}\r\n")
 sock.write(payload)
 sock.write(TERMINATOR)
