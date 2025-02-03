@@ -126,8 +126,8 @@ def sock_get_multi(sock, pairs)
     next unless line.start_with?('VA ') || last_result
 
     _, value_length, _flags, key = line.split
-    value = sock.read(value_length.to_i + TERMINATOR.length)
-    results[key[1..]] = value.chomp!(0..-TERMINATOR.length)
+    results[key[1..]] = sock.read(value_length.to_i)
+    sock.read(TERMINATOR.length)
     break if results.size == pairs.size
     break if last_result
   end
