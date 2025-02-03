@@ -11,13 +11,12 @@ require 'json'
 
 gemfile do
   source 'https://rubygems.org'
-  gem 'dalli'
   gem 'benchmark-ips'
   gem 'vernier'
   gem 'logger'
 end
 
-require 'dalli'
+require_relative '../lib/dalli'
 require 'benchmark/ips'
 require 'vernier'
 
@@ -103,6 +102,12 @@ def sock_get_multi(sock, pairs)
   end
   results
 end
+
+Vernier.profile(out: 'ruby_profile.json') do
+  start_time = Time.now
+  a = "hi" while Time.now - start_time < bench_time
+end
+exit 0
 
 if %w[all get].include?(bench_target)
   Vernier.profile(out: 'client_get_profile.json') do
