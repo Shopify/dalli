@@ -12,12 +12,11 @@ require 'json'
 
 gemfile do
   source 'https://rubygems.org'
-  gem 'dalli'
   gem 'benchmark-ips'
   gem 'logger'
 end
 
-require 'dalli'
+require_relative '../lib/dalli'
 require 'benchmark/ips'
 require 'monitor'
 

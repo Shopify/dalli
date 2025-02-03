@@ -4,7 +4,7 @@ require 'English'
 require 'socket'
 require 'timeout'
 
-require 'dalli/pid_cache'
+require_relative '../pid_cache'
 
 module Dalli
   module Protocol
