@@ -19,8 +19,8 @@ jobs:
     - name: Set up Ruby
       uses: ruby/setup-ruby@v1
       with:
-        ruby-version: 3.3
-        bundler-cache: false # 'bundle install' and cache
+        ruby-version: 3.4
+        bundler-cache: true # 'bundle install' and cache
     - name: Run Profiles
       run: RUBY_YJIT_ENABLE=1 BENCH_TARGET=all bundle exec bin/profile
     - name: Upload profile results
