@@ -6,6 +6,7 @@
 #
 # run with:
 # bundle exec bin/benchmark
+# RUBY_YJIT_ENABLE=1 BENCH_TARGET=get bundle exec bin/benchmark
 require 'bundler/inline'
 require 'json'
 
@@ -13,10 +14,12 @@ gemfile do
   source 'https://rubygems.org'
   gem 'dalli'
   gem 'benchmark-ips'
+  gem 'logger', '=1.6.1'
 end
 
 require 'dalli'
 require 'benchmark/ips'
+require 'monitor'
 
 ##
 # StringSerializer is a serializer that avoids the overhead of Marshal or JSON.
@@ -31,9 +34,17 @@ class StringSerializer
   end
 end
 
-BENCH_TIME = (ENV['BENCH_TIME'] || 5).to_i
-BENCH_JOB  = ENV['BENCH_JOB'] || 'set_multi'
+dalli_url = ENV['BENCH_CACHE_URL'] || "127.0.0.1:11211"
+
+if dalli_url.include?('unix')
+  ENV['BENCH_CACHE_URL'].gsub('unix://','')
+end
+bench_target = ENV['BENCH_TARGET'] || 'set'
+bench_time = (ENV['BENCH_TIME'] || 10).to_i
+bench_warmup = (ENV['BENCH_WARMUP'] || 3).to_i
+bench_payload_size = (ENV['BENCH_PAYLOAD_SIZE'] || 700_000).to_i
 TERMINATOR = "\r\n"
+puts "yjit: #{RubyVM::YJIT.enabled?}"
 
 client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
 multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false)
@@ -49,22 +60,22 @@ sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_KEEPALIVE, true)
 sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_SNDBUF, 1024 * 1024 * 8)
 
 TERMINATOR = "\r\n"
-payload = 'B' * 1_000_000
+payload = 'B' * bench_payload_size
 
 # ensure the clients are all connected and working
 client.set('key', payload)
 string_client.set('string_key', payload)
-sock.write("set sock_key 0 3600 1000000\r\n")
+sock.write("set sock_key 0 3600 #{payload.bytesize}\r\n")
 sock.write(payload)
 sock.write(TERMINATOR)
 sock.flush
 sock.readline # clear the buffer
 
 # ensure we have basic data for the benchmarks and get calls
-payload_fifty = 'B' * 50_000
+payload_smaller = 'B' * 50_000
 pairs = {}
 100.times do |i|
-  pairs["multi_#{i}"] = payload_fifty
+  pairs["multi_#{i}"] = payload_smaller
 end
 client.quiet do
   pairs.each do |key, value|
@@ -123,14 +134,14 @@ def sock_get_multi(sock, pairs)
   results
 end
 
-case BENCH_JOB
-when 'set'
+
+if %w[all set].include?(bench_target)
   Benchmark.ips do |x|
-    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
-    x.report('set 1MB MARSHAL') { client.set('key', payload) }
-    x.report('set 1MB STRING') { string_client.set('string_key', payload) }
-    x.report('set 1MB raw sock') do
-      sock.write("ms sock_key 1000000 c F0 T3600 MS \r\n")
+    x.config(warmup: bench_warmup, time: bench_time, suite: suite)
+    x.report('client set') { client.set('key', payload) }
+    #x.report('multi client set') { multi_client.set('string_key', payload) }
+    x.report('raw sock set') do
+      sock.write("ms sock_key #{payload.bytesize} T3600 MS\r\n")
       sock.write(payload)
       sock.write("\r\n")
       sock.flush
@@ -138,28 +149,56 @@ when 'set'
     end
     x.compare!
   end
-when 'get'
+end
+
+@lock = Monitor.new
+if %w[all get].include?(bench_target)
   Benchmark.ips do |x|
-    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
-    x.report('get 1MB MARSHAL') { client.get('key') }
-    x.report('get 1MB STRING') { string_client.get('string_key') }
-    x.report('get 1MB raw sock') do
+    x.config(warmup: bench_warmup, time: bench_time, suite: suite)
+    x.report('get dalli') { client.get('key') }
+    # NOTE: while this is the fastest it is not thread safe and is blocking vs IO sharing friendly
+    x.report('get sock') do
       sock.write("get sock_key\r\n")
       sock.readline
-      sock.read(1_000_000)
+      sock.read(payload.bytesize)
+    end
+    # NOTE: This shows that when adding thread safety & non-blocking IO we are slower for single process/thread use case
+    x.report('get sock non-blocking') do
+      @lock.synchronize do
+        sock.write("get sock_key\r\n")
+        sock.readline
+        count = payload.bytesize
+        value = String.new(capacity: count + 1)
+        loop do
+          begin
+            value << sock.read_nonblock(count - value.bytesize)
+          rescue Errno::EAGAIN
+            IO.select([sock])
+            retry
+          rescue EOFError
+            puts "EOFError"
+            break
+          end
+          break if value.bytesize == count
+        end
+      end
     end
     x.compare!
   end
-when 'get_multi'
+end
+
+if %w[all get_multi].include?(bench_target)
   Benchmark.ips do |x|
-    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
+    x.config(warmup: bench_warmup, time: bench_time, suite: suite)
     x.report('get 100 keys') { client.get_multi(pairs.keys) }
     x.report('get 100 keys raw sock') { sock_get_multi(sock, pairs) }
     x.compare!
   end
-when 'set_multi'
+end
+
+if %w[all set_multi].include?(bench_target)
   Benchmark.ips do |x|
-    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
+    x.config(warmup: bench_warmup, time: bench_time, suite: suite)
     x.report('write 100 keys simple') do
       client.quiet do
         pairs.each do |key, value|
@@ -173,7 +212,7 @@ when 'set_multi'
     x.report('write 100 keys rawsock') do
       count = pairs.length
       tail = ''
-      value_bytesize = payload_fifty.bytesize
+      value_bytesize = payload_smaller.bytesize
       ttl = 3600
 
       pairs.each do |key, value|
