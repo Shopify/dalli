@@ -21,6 +21,20 @@ describe 'operations' do
       end
     end
 
+    it 'returns the value on a hit when using raw single server optimized get' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        val1 = '1234567890' * 50
+        dc.set('a', val1)
+        val2 = dc.get('a')
+
+        assert_equal val1, val2
+      end
+    end
+
     it 'return the value that include TERMINATOR on a hit' do
       memcached_persistent do |dc|
         dc.flush
@@ -46,14 +60,14 @@ describe 'operations' do
 
         assert_equal val1, val2
         # not yet hit, and last accessed 0 from set
-        assert_equal({ c: 0, l: 0, h: false, t: -1, bitflag: nil }, meta_flags)
+        assert_equal({ c: 0, l: 0, h: false, t: -1, bitflag: nil }.sort, meta_flags.sort)
 
         sleep 1 # we can't simulate time in memcached so we need to sleep
         # ensure hit true and last accessed 1
         val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t])
 
         assert_equal val1, val2
-        assert_equal({ c: 0, l: 1, h: true, t: -1, bitflag: nil }, meta_flags)
+        assert_equal({ c: 0, l: 1, h: true, t: -1, bitflag: nil }.sort, meta_flags.sort)
 
         assert op_addset_succeeds(dc.set('meta_key', nil))
         assert_nil dc.get('meta_key')

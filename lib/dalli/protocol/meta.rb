@@ -50,12 +50,18 @@ module Dalli
       end
 
       # rubocop:disable Metrics/AbcSize
+      # rubocop:disable Metrics/MethodLength
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/PerceivedComplexity
       def read_multi_req(keys)
         # Pre-allocate the results hash with expected size
         results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
+        optimized_for_raw = @value_marshaller.raw_by_default
+        key_index = optimized_for_raw ? 2 : 3
 
+        post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
         keys.each do |key|
-          @connection_manager.write("mg #{key} v f k q\r\n")
+          @connection_manager.write("mg #{key} #{post_get_req}")
         end
         @connection_manager.write("mn\r\n")
         @connection_manager.flush
@@ -68,25 +74,42 @@ module Dalli
           # VA value_length flags key
           tokens = line.split
           value = @connection_manager.read_exact(tokens[1].to_i)
+          bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
           @connection_manager.read_exact(terminator_length) # read the terminator
-          results[tokens[3].byteslice(1..-1)] =
-            @value_marshaller.retrieve(value, @response_processor.bitflags_from_tokens(tokens))
+          results[tokens[key_index].byteslice(1..-1)] =
+            @value_marshaller.retrieve(value, bitflags)
         end
         results
       end
       # rubocop:enable Metrics/AbcSize
+      # rubocop:enable Metrics/MethodLength
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/PerceivedComplexity
 
       # Retrieval Commands
+      # rubocop:disable Metrics/AbcSize
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/PerceivedComplexity
       def get(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        req = RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_flag_options(options))
-        write(req)
-        if meta_flag_options(options)
+        meta_options = meta_flag_options(options)
+
+        if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
+          write("mg #{encoded_key} v\r\n")
+        else
+          write(RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_options))
+        end
+        if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
+          response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+        elsif meta_options
           response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
         else
           response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
         end
       end
+      # rubocop:enable Metrics/AbcSize
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/PerceivedComplexity
 
       def quiet_get_request(key)
         encoded_key, base64 = KeyRegularizer.encode(key)

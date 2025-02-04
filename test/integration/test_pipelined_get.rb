@@ -75,6 +75,28 @@ describe 'Pipelined Get' do
     end
   end
 
+  it 'meta read_multi_req supports optimized raw get' do
+    memcached_persistent do |_, port|
+      dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+      dc.close
+      dc.flush
+
+      keys_to_query = %w[a b]
+
+      resp = dc.get_multi(keys_to_query)
+
+      assert_empty(resp)
+
+      dc.set('a', 'foo')
+      dc.set('b', 'bar')
+
+      resp = dc.get_multi(keys_to_query)
+      expected_resp = { 'a' => 'foo', 'b' => 'bar' }
+
+      assert_equal(expected_resp, resp)
+    end
+  end
+
   it 'meta read_multi_req supports pipelined get doesnt default value on misses' do
     memcached_persistent do |_, port|
       dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace')
