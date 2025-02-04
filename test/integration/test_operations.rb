@@ -60,14 +60,14 @@ describe 'operations' do
 
         assert_equal val1, val2
         # not yet hit, and last accessed 0 from set
-        assert_equal({ c: 0, l: 0, h: false, t: -1, bitflag: nil }, meta_flags)
+        assert_equal({ c: 0, l: 0, h: false, t: -1, bitflag: nil }.sort, meta_flags.sort)
 
         sleep 1 # we can't simulate time in memcached so we need to sleep
         # ensure hit true and last accessed 1
         val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t])
 
         assert_equal val1, val2
-        assert_equal({ c: 0, l: 1, h: true, t: -1, bitflag: nil }, meta_flags)
+        assert_equal({ c: 0, l: 1, h: true, t: -1, bitflag: nil }.sort, meta_flags.sort)
 
         assert op_addset_succeeds(dc.set('meta_key', nil))
         assert_nil dc.get('meta_key')
