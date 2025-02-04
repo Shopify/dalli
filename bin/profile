@@ -11,13 +11,12 @@ require 'json'
 
 gemfile do
   source 'https://rubygems.org'
-  gem 'dalli'
   gem 'benchmark-ips'
   gem 'vernier'
   gem 'logger'
 end
 
-require 'dalli'
+require_relative '../lib/dalli'
 require 'benchmark/ips'
 require 'vernier'
 
@@ -46,7 +45,6 @@ TERMINATOR = "\r\n"
 puts "yjit: #{RubyVM::YJIT.enabled?}"
 
 client = Dalli::Client.new('localhost', serializer: StringSerializer, compress: false)
-multi_client = Dalli::Client.new('localhost:112111,localhost:11222', serializer: StringSerializer, compress: false)
 
 # The raw socket implementation is used to benchmark the performance of dalli & the overhead of the various abstractions
 # in the library.
@@ -96,15 +94,31 @@ def sock_get_multi(sock, pairs)
     next unless line.start_with?('VA ') || last_result
 
     _, value_length, _flags, key = line.split
-    value = sock.read(value_length.to_i + TERMINATOR.length)
-    results[key[1..]] = value.chomp!(0..-TERMINATOR.length)
+    results[key[1..]] = sock.read(value_length.to_i)
+    sock.read(TERMINATOR.length)
     break if results.size == pairs.size
     break if last_result
   end
   results
 end
 
-if bench_target == 'get'
+def sock_set_multi(sock, pairs)
+  count = pairs.length
+  tail = ''
+  ttl = 3600
+
+  pairs.each do |key, value|
+    count -= 1
+    tail = count.zero? ? '' : 'q'
+    sock.write(String.new("ms #{key} #{value.bytesize} c F0 T#{ttl} MS #{tail}\r\n", capacity: key.size + value.bytesize + 40))
+    sock.write(value)
+    sock.write(TERMINATOR)
+  end
+  sock.flush
+  sock.gets(TERMINATOR) # clear the buffer
+end
+
+if %w[all get].include?(bench_target)
   Vernier.profile(out: 'client_get_profile.json') do
     start_time = Time.now
     client.get(dalli_key) while Time.now - start_time < bench_time
@@ -118,5 +132,46 @@ if bench_target == 'get'
       sock.read(payload.bytesize)
     end
   end
-  exit 0
+end
+
+if %w[all set].include?(bench_target)
+  Vernier.profile(out: 'client_set_profile.json') do
+    start_time = Time.now
+    client.set(dalli_key, payload, 3600, raw: true) while Time.now - start_time < bench_time
+  end
+
+  Vernier.profile(out: 'socket_set_profile.json') do
+    start_time = Time.now
+    while Time.now - start_time < bench_time
+      sock.write("ms sock_key #{payload.bytesize} T3600 MS\r\n")
+      sock.write(payload)
+      sock.write("\r\n")
+      sock.flush
+      sock.readline # clear the buffer
+    end
+  end
+end
+
+if %w[all get_multi].include?(bench_target)
+  Vernier.profile(out: 'client_get_multi_profile.json') do
+    start_time = Time.now
+    client.get_multi(pairs.keys) while Time.now - start_time < bench_time
+  end
+
+  Vernier.profile(out: 'socket_get_multi_profile.json') do
+    start_time = Time.now
+    sock_get_multi(sock, pairs) while Time.now - start_time < bench_time
+  end
+end
+
+if %w[all set_multi].include?(bench_target)
+  Vernier.profile(out: 'client_set_multi_profile.json') do
+    start_time = Time.now
+    client.set_multi(pairs, 3600, raw: true) while Time.now - start_time < bench_time
+  end
+
+  Vernier.profile(out: 'socket_set_multi_profile.json') do
+    start_time = Time.now
+    sock_set_multi(sock, pairs) while Time.now - start_time < bench_time
+  end
 end
