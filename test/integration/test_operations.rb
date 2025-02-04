@@ -21,6 +21,20 @@ describe 'operations' do
       end
     end
 
+    it 'returns the value on a hit when using raw single server optimized get' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        val1 = '1234567890' * 50
+        dc.set('a', val1)
+        val2 = dc.get('a')
+
+        assert_equal val1, val2
+      end
+    end
+
     it 'return the value that include TERMINATOR on a hit' do
       memcached_persistent do |dc|
         dc.flush
