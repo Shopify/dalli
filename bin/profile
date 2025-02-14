@@ -6,7 +6,7 @@
 #
 # run with:
 # RUBY_YJIT_ENABLE=1 bundle exec bin/profile
-# view profiles locally with
+# view profiles locally with (add to gemfile for easy access):
 # bundle exec profile-viewer client_get_multi_allocations.json
 require 'bundler/inline'
 require 'json'
@@ -127,11 +127,11 @@ def allocations
 end
 
 if bench_target == 'get_multi_allocations'
+  start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   puts "allocations:"
   puts allocations { client.get_multi(pairs.keys) }
   Vernier.profile(out: 'client_get_multi_allocations.json', allocation_interval: 1) do
-    start_time = Time.now
-    client.get_multi(pairs.keys) while Time.now - start_time < bench_time
+    client.get_multi(pairs.keys) while Process.clock_gettime(Process::CLOCK_MONOTONIC) - start_time < bench_time
   end
   exit 0
 end
