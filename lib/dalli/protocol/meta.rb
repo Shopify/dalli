@@ -11,13 +11,15 @@ module Dalli
     # protocol.  Contains logic for managing connection state to the server (retries, etc),
     # formatting requests to the server, and unpacking responses.
     ##
-    class Meta < Base
+    class Meta < Base # rubocop:disable Metrics/ClassLength
       TERMINATOR = "\r\n"
       META_NOOP = "mn\r\n"
       META_NOOP_RESP = 'MN'
       META_VALUE_RESP = 'VA'
       META_GET_REQ_NO_FLAGS = "v k q\r\n"
       META_GET_REQ = "v f k q\r\n"
+      M_CONSTANT = 'M'.ord
+      V_CONSTANT = 'V'.ord
       SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
       def response_processor
@@ -62,7 +64,6 @@ module Dalli
         # Pre-allocate the results hash with expected size
         results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
         optimized_for_raw = @value_marshaller.raw_by_default
-        key_index = optimized_for_raw ? 2 : 3
         terminator_buffer = String.new(TERMINATOR, capacity: TERMINATOR.size)
 
         post_get_req = optimized_for_raw ? META_GET_REQ_NO_FLAGS : META_GET_REQ
@@ -73,17 +74,36 @@ module Dalli
         @connection_manager.flush
 
         terminator_length = TERMINATOR.length
-        while (line = @connection_manager.readline)
-          # VA value_length flags key
-          tokens = optimized_for_raw ? line.split(nil, 4) : line.split
-          break if tokens[0] == META_NOOP_RESP
-          next unless tokens[0] == META_VALUE_RESP
+        while (byte = @connection_manager.read_byte)
+          if byte == M_CONSTANT
+            @connection_manager.readline
+            break
+          end
+          unless byte == V_CONSTANT
+            @connection_manager.readline
+            next
+          end
 
-          value = @connection_manager.read(tokens[1].to_i)
-          bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
+          @connection_manager.read_byte # skip 'A'
+          @connection_manager.read_byte # skip terminator
+          line = @connection_manager.readline
+          # VA value_length kNAME\r\n
+          # if rindex and linex are equal split out flags
+          right_seperator_index = line.rindex(' ')
+          left_seperator_index = line.index(' ')
+          bitflags = if right_seperator_index == left_seperator_index
+                       0
+                     else
+                       line.byteslice(left_seperator_index + 2, right_seperator_index - left_seperator_index - 1).to_i
+                     end
+
+          # +2 on index skips the space and 'k', then - 4 for the ' k' and "\r\n"
+          key = line.byteslice(right_seperator_index + 2, (line.length - right_seperator_index - 4))
+
+          value = @connection_manager.read(line.to_i)
           @connection_manager.read_to_outstring(terminator_length, terminator_buffer)
-          results[tokens[key_index].byteslice(1, 256)] =
-            optimized_for_raw ? value : @value_marshaller.retrieve(value, bitflags)
+          results[key] =
+            bitflags.zero? ? value : @value_marshaller.retrieve(value, bitflags)
         end
         results
       end

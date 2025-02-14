@@ -8,6 +8,7 @@ group :development, :test do
   gem 'connection_pool'
   gem 'debug'
   gem 'minitest', '~> 5'
+  gem 'profile-viewer'
   gem 'rack', '~> 2.0', '>= 2.2.0'
   gem 'rake', '~> 13.0'
   gem 'rubocop'

@@ -90,8 +90,16 @@ describe 'Pipelined Get' do
       dc.set('a', 'foo')
       dc.set('b', 'bar')
 
+      dc.set('a_really_big', 'foo')
+      dc.set('big_big_really_long_key', 'bar')
+
       resp = dc.get_multi(keys_to_query)
       expected_resp = { 'a' => 'foo', 'b' => 'bar' }
+
+      assert_equal(expected_resp, resp)
+
+      resp = dc.get_multi(%w[a_really_big big_big_really_long_key])
+      expected_resp = { 'a_really_big' => 'foo', 'big_big_really_long_key' => 'bar' }
 
       assert_equal(expected_resp, resp)
     end
