@@ -50,11 +50,11 @@ module Dalli
           [@value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens)), cas]
         end
 
-        def meta_get_with_value_and_meta_flags(cache_nils: false)
+        def meta_get_with_value_and_meta_flags(cache_nils: false, meta_flags: [])
           tokens = error_on_unexpected!([VA, EN, HD])
           return [(cache_nils ? ::Dalli::NOT_FOUND : nil), {}] if tokens.first == EN
 
-          meta_flags = meta_flags_from_tokens(tokens)
+          meta_flags = meta_flags_from_tokens(tokens, meta_flags)
           return [(cache_nils ? ::Dalli::NOT_FOUND : nil), meta_flags] unless tokens.first == VA
 
           value, bitflag = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
@@ -192,14 +192,39 @@ module Dalli
           raise Dalli::DalliError, "Response error: #{tokens.first}"
         end
 
-        def meta_flags_from_tokens(tokens)
-          {
-            c: cas_from_tokens(tokens),
-            h: hit_from_tokens(tokens),
-            l: last_accessed_from_tokens(tokens),
-            t: ttl_remaining_from_tokens(tokens)
-          }
+        # rubocop:disable Metrics/MethodLength
+        def meta_flags_from_tokens(tokens, meta_flags)
+          flag_values = {}
+
+          meta_flags.each do |flag|
+            if flag == :c
+              flag_values[:c] = cas_from_tokens(tokens)
+              next
+            end
+
+            if flag == :h
+              flag_values[:h] = hit_from_tokens(tokens)
+              next
+            end
+
+            if flag == :l
+              flag_values[:l] = last_accessed_from_tokens(tokens)
+              next
+            end
+
+            if flag == :t
+              flag_values[:t] = ttl_remaining_from_tokens(tokens)
+              next
+            end
+
+            if flag.match?(/^N\d+$/)
+              flag_values[:w] = tokens.any?('W')
+              flag_values[:z] = tokens.any?('Z')
+            end
+          end
+          flag_values
         end
+        # rubocop:enable Metrics/MethodLength
 
         def bitflags_from_tokens(tokens)
           value_from_tokens(tokens, 'f')&.to_i
