@@ -173,15 +173,16 @@ module Dalli
       loop do
         val, meta_flags = get(key, req_options)
 
-        if meta_flags[:w]
+        if val && val != ''
+          return val
+        elsif meta_flags[:w]
           new_val = yield
           set(key, new_val, ttl_or_default(ttl), clean_req_options)
           return new_val
-        elsif meta_flags[:z] && (!val.nil? || val != '')
+        elsif meta_flags[:z]
           break if Time.now.to_f >= lock_wait_end_time
-        elsif val
-          return val
         end
+
         sleep(fill_lock_interval)
       end
       yield # fails to read value in wait time, yield back the value
@@ -436,7 +437,7 @@ module Dalli
       lock_ttl = req_options.delete(:lock_ttl) || LOCK_TTL
       fill_lock_interval = req_options.delete(:fill_lock_interval) || FILL_LOCK_INTERVAL
 
-      raise ArgumentError, 'lock_ttl must be a positive integer' if !lock_ttl.is_a?(Integer) && lock_ttl <= 1
+      raise ArgumentError, 'lock_ttl must be a positive integer' if !lock_ttl.is_a?(Integer) && lock_ttl < 1
 
       if fill_lock_interval.is_a?(Numeric) && fill_lock_interval <= 0
         raise ArgumentError,
