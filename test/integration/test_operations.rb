@@ -686,4 +686,184 @@ describe 'operations' do
       end
     end
   end
+
+  describe 'fetch_multi_with_lock' do
+    it 'uses default lock TTL and fill lock interval when no options provided' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        start_time = Time.now.to_f
+        executed = 0
+        values = dc.fetch_multi_with_lock(%w[lock_key1 lock_key2]) do |key|
+          executed += 1
+          "new_value_#{key}"
+        end
+        end_time = Time.now.to_f
+
+        assert_equal 2, executed
+        assert_equal 'new_value_lock_key1', values['lock_key1']
+        assert_equal 'new_value_lock_key2', values['lock_key2']
+        # Verify execution time is within expected range for default TTL
+        assert_operator (end_time - start_time), :<, Dalli::Client::LOCK_TTL
+      end
+    end
+
+    it 'respects custom lock TTL' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        custom_ttl = 2 # shorter than default
+        start_time = Time.now.to_f
+        executed = 0
+        values = dc.fetch_multi_with_lock(%w[lock_key1 lock_key2], nil, { lock_ttl: custom_ttl }) do |key|
+          executed += 1
+          "new_value_#{key}"
+        end
+        end_time = Time.now.to_f
+
+        assert_equal 2, executed
+        assert_equal 'new_value_lock_key1', values['lock_key1']
+        assert_equal 'new_value_lock_key2', values['lock_key2']
+        # Verify execution time is within expected range for custom TTL
+        assert_operator (end_time - start_time), :<, custom_ttl
+      end
+    end
+
+    it 'respects custom fill lock interval' do
+      memcached_persistent do |_, port|
+        memcached_persistent do |_, port2|
+          dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace2', raw: true)
+          dc.close
+          dc.flush
+          dc2 = Dalli::Client.new("localhost:#{port2}", namespace: 'some:namspace2', raw: true)
+          dc2.close
+          dc2.flush
+
+          custom_interval = 0.05 # longer than default
+          start_time = Time.now.to_f
+          executed = 0
+          keys = %w[custom_fill_lock_key1 custom_fill_lock_key2]
+
+          # Set up a concurrent update to force waiting
+          Thread.new do
+            dc2.fetch_multi_with_lock(keys, 1, { lock_ttl: 3 }) do |key|
+              sleep(1.5) # Hold the lock briefly
+              "other_value_#{key}"
+            end
+          end
+
+          # Small delay to ensure the other thread gets the lock first
+          sleep(0.05)
+
+          values = dc.fetch_multi_with_lock(keys, 2, { lock_ttl: 3, fill_lock_interval: custom_interval }) do |key|
+            executed += 1
+            "new_value_#{key}"
+          end
+          end_time = Time.now.to_f
+
+          assert_equal 2, executed
+          assert_equal 'new_value_custom_fill_lock_key1', values['custom_fill_lock_key1']
+          assert_equal 'new_value_custom_fill_lock_key2', values['custom_fill_lock_key2']
+          # Verify we waited at least one interval
+          assert_operator (end_time - start_time), :>, custom_interval
+        end
+      end
+    end
+
+    it 'supports both custom lock TTL and fill lock interval' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        custom_ttl = 3
+        custom_interval = 0.05
+        executed = 0
+        values = dc.fetch_multi_with_lock(%w[custom_lock_key1 custom_lock_key2], 2, {
+                                            lock_ttl: custom_ttl,
+                                            fill_lock_interval: custom_interval
+                                          }) do |key|
+          executed += 1
+          "new_value_#{key}"
+        end
+
+        assert_equal 2, executed
+        assert_equal 'new_value_custom_lock_key1', values['custom_lock_key1']
+        assert_equal 'new_value_custom_lock_key2', values['custom_lock_key2']
+        assert_equal 'new_value_custom_lock_key1', dc.get('custom_lock_key1')
+        assert_equal 'new_value_custom_lock_key2', dc.get('custom_lock_key2')
+      end
+    end
+
+    it 'raises when given a bad argument for both custom lock TTL and fill lock interval' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        custom_ttl = 3
+        custom_interval = 0.05
+
+        assert_raises ArgumentError do
+          dc.fetch_multi_with_lock(%w[custom_lock_key1 custom_lock_key2], nil, {
+                                     lock_ttl: 0.1,
+                                     fill_lock_interval: custom_interval
+                                   }) do |key|
+            "new_value_#{key}"
+          end
+        end
+
+        assert_raises ArgumentError do
+          dc.fetch_multi_with_lock(%w[custom_lock_key1 custom_lock_key2], nil, {
+                                     lock_ttl: custom_ttl,
+                                     fill_lock_interval: -0.1
+                                   }) do |key|
+            "new_value_#{key}"
+          end
+        end
+      end
+    end
+
+    it 'times out and yields after lock TTL expires' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        custom_ttl = 1 # Very short TTL
+        start_time = Time.now.to_f
+        keys = %w[lock_key1 lock_key2]
+
+        # Set up a concurrent update that holds the lock
+        Thread.new do
+          dc.fetch_multi_with_lock(keys, 3, { lock_ttl: (custom_ttl + 1) }) do |key|
+            sleep(1.75) # Hold the lock longer than the custom TTL used on the second call
+            "holding_value_#{key}"
+          end
+        end
+
+        # Small delay to ensure the other thread gets the lock first
+        sleep(0.05)
+
+        executed = 0
+        values = dc.fetch_multi_with_lock(keys, 1, { lock_ttl: custom_ttl }) do |key|
+          executed += 1
+          "timeout_value_#{key}"
+        end
+        end_time = Time.now.to_f
+
+        assert_equal 2, executed
+        assert_equal 'timeout_value_lock_key1', values['lock_key1']
+        assert_equal 'timeout_value_lock_key2', values['lock_key2']
+        # Verify we waited at least the TTL
+        assert_operator (end_time - start_time), :>, custom_ttl
+        # But not too much longer
+        assert_operator (end_time - start_time), :<, custom_ttl + 0.1
+      end
+    end
+  end
 end

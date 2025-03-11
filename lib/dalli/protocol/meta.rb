@@ -53,13 +53,17 @@ module Dalli
       # rubocop:disable Metrics/MethodLength
       # rubocop:disable Metrics/CyclomaticComplexity
       # rubocop:disable Metrics/PerceivedComplexity
-      def read_multi_req(keys)
+      def read_multi_req(keys, req_options = nil)
         # Pre-allocate the results hash with expected size
         results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
         optimized_for_raw = @value_marshaller.raw_by_default
         key_index = optimized_for_raw ? 2 : 3
 
+        req_options = {} if req_options.nil?
+        lock_ttl = req_options[:lock_ttl]
         post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
+        post_get_req = post_get_req.gsub('q', "q N#{lock_ttl}") if lock_ttl
+
         keys.each do |key|
           @connection_manager.write("mg #{key} #{post_get_req}")
         end
@@ -76,8 +80,18 @@ module Dalli
           value = @connection_manager.read_exact(tokens[1].to_i)
           bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
           @connection_manager.read_exact(terminator_length) # read the terminator
-          results[tokens[key_index].byteslice(1..-1)] =
-            @value_marshaller.retrieve(value, bitflags)
+
+          if lock_ttl
+            flag_values = {}
+            flag_values[:w] = tokens.any?('W')
+            flag_values[:z] = tokens.any?('Z')
+
+            results[tokens[key_index].byteslice(1..-1)] =
+              [@value_marshaller.retrieve(value, bitflags), flag_values]
+          else
+            results[tokens[key_index].byteslice(1..-1)] =
+              @value_marshaller.retrieve(value, bitflags)
+          end
         end
         results
       end

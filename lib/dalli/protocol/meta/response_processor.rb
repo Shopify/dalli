@@ -123,7 +123,6 @@ module Dalli
 
         def consume_all_responses_until_mn
           tokens = next_line_to_tokens
-
           tokens = next_line_to_tokens while tokens.first != MN
           true
         end

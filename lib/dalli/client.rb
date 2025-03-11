@@ -191,6 +191,79 @@ module Dalli
     # rubocop:enable Metrics/CyclomaticComplexity
     # rubocop:enable Metrics/PerceivedComplexity
 
+    # Fetch the values associated with the keys, along with a lock.
+    # If a value is found, then it is returned.
+    #
+    # If a value is not found and no block is given, then nil is returned.
+    #
+    # TODO: This is currently the niave implementation, which will not scale.
+    #
+    # If a value is not found (or if the found value is nil and :cache_nils is false)
+    # and a block is given, the block will be invoked and its return value
+    # written to the cache and returned.
+    # rubocop:disable Metrics/AbcSize
+    # rubocop:disable Metrics/CyclomaticComplexity
+    # rubocop:disable Metrics/PerceivedComplexity
+    # rubocop:disable Metrics/MethodLength
+    def fetch_multi_with_lock(keys = [], ttl = nil, req_options = nil)
+      raise ArgumentError, 'fetch_multi_with_lock only supports single server' unless ring.servers.size == 1
+
+      local_keys = keys.dup
+      req_options = {} if req_options.nil?
+      lock_ttl, fill_lock_interval, lock_wait_end_time = get_lock_options(req_options)
+      req_options[:lock_ttl] = lock_ttl
+      clean_req_options = cache_nils ? req_options.merge(CACHE_NILS) : req_options
+      results = {}
+
+      until local_keys.empty? || Time.now.to_f >= lock_wait_end_time
+        # Get all remaining keys in one batch, not we dup as the below method
+        # will modify the keys by namespacing them
+        responses = pipelined_getter.process(local_keys.dup, req_options)
+
+        # Group keys by their state
+        locked_keys = []
+
+        responses.each do |key, (val, meta_flags)|
+          if val && val != ''
+            # Key has a value and no locks
+            results[key] = val
+            local_keys.delete(key)
+          elsif meta_flags[:w]
+            # Key has write lock, process it
+            new_val = yield(key)
+            locked_keys << key
+            results[key] = new_val
+            local_keys.delete(key)
+          elsif meta_flags[:z]
+            # Key is locked, needs retry up until the lock wait end time
+          end
+        end
+
+        # set locked_keys
+        if locked_keys.any?
+          locked_pairs = {}
+          locked_keys.each do |key|
+            locked_pairs[@key_manager.validate_key(key)] = results[key]
+          end
+          set_multi(locked_pairs, ttl_or_default(ttl), clean_req_options.dup)
+          locked_keys.clear
+        end
+
+        sleep(fill_lock_interval) if keys.any?
+      end
+
+      # Process any remaining keys that timed out waiting for locks
+      local_keys.each do |key|
+        results[key] = yield(key)
+      end
+
+      results
+    end
+    # rubocop:enable Metrics/AbcSize
+    # rubocop:enable Metrics/CyclomaticComplexity
+    # rubocop:enable Metrics/PerceivedComplexity
+    # rubocop:enable Metrics/MethodLength
+
     ##
     # compare and swap values using optimistic locking.
     # Fetch the existing value for key.
