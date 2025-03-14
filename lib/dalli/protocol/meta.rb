@@ -31,6 +31,8 @@ module Dalli
         pairs.each do |key, raw_value|
           (value, bitflags) = @value_marshaller.store(key, raw_value, options)
           encoded_key, _base64 = KeyRegularizer.encode(key)
+          encoded_key = @key_manager.validate_key(encoded_key)
+
           value_bytesize = value.bytesize
           # if last pair of hash, add TERMINATOR
 

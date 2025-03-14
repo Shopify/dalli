@@ -35,6 +35,28 @@ describe 'operations' do
       end
     end
 
+    it 'set_multi respects namespaces when using raw single server' do
+      memcached_persistent do |_, port|
+        dc = Dalli::Client.new("localhost:#{port}", namespace: 'some:namspace', raw: true)
+        dc.close
+        dc.flush
+
+        pairs = { 'paira' => 'vala', 'pairb' => 'valb', 'pairc' => 'valc' }
+        dc.set_multi(pairs, 5)
+
+        assert_equal pairs, dc.get_multi(pairs.keys)
+      end
+    end
+
+    it 'set_multi respects namespaces on multiple servers' do
+      memcached_persistent do |dc, _port|
+        pairs = { 'paira' => 'vala', 'pairb' => 'valb', 'pairc' => 'valc' }
+        dc.set_multi(pairs, 5)
+
+        assert_equal pairs, dc.get_multi(pairs.keys)
+      end
+    end
+
     it 'return the value that include TERMINATOR on a hit' do
       memcached_persistent do |dc|
         dc.flush
