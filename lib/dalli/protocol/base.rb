@@ -24,6 +24,7 @@ module Dalli
         hostname, port, socket_type, @weight, user_creds = ServerConfigParser.parse(attribs)
         @options = client_options.merge(user_creds)
         @value_marshaller = ValueMarshaller.new(@options)
+        @key_manager = KeyManager.new(@options)
         @connection_manager = ConnectionManager.new(hostname, port, socket_type, @options)
       end
 
