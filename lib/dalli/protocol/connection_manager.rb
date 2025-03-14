@@ -243,7 +243,7 @@ module Dalli
         # Close socket on a fork, setting us up for reconnect
         # on next request.
         close
-        raise Dalli::NetworkError, message
+        raise Dalli::RetryableNetworkError, message
       end
 
       def fork_detected?
