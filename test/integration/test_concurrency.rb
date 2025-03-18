@@ -119,20 +119,27 @@ describe 'concurrent behavior' do
           value << 'z'
         end))
         assert_equal 'zzzz', cache.get('f')
+        multi_keys = { 'ab' => 'vala', 'bb' => 'valb', 'cb' => 'valc', 'dd' => 'vald' }
+        cache.set_multi(multi_keys, 10)
 
         10.times do
+          cache.get_multi(multi_keys.keys)
           workers << Process.fork do
             # first request after forking will try to reconnect to the server, we need to ensure we hit both rings
             cache.set('ring1', 'work')
             cache.set('ring2', 'work')
             sleep(0.2)
-            10.times do
+            cache.set_multi(multi_keys, 10)
+            100.times do
               cache.set('a', 9)
               cache.set('b', 11)
               cache.set('f', 'zzz')
+              cache.set_multi(multi_keys, 10)
               res = cache.cas('f') do |value|
                 value << 'z'
               end
+
+              assert_equal multi_keys, cache.get_multi(multi_keys.keys)
 
               refute_nil res
               refute cache.add('a', 11)
