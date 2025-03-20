@@ -10,6 +10,8 @@ module Dalli
   ##
   # rubocop:disable Metrics/ClassLength
   class Client
+    LOCK_TTL = 5 # seconds, default lock TTL
+    FILL_LOCK_INTERVAL = 0.01 # seconds, default fill lock interval
     ##
     # Dalli::Client is the main class which developers will use to interact with
     # the memcached server.  Usage:
@@ -147,6 +149,47 @@ module Dalli
       add(key, new_val, ttl_or_default(ttl), req_options)
       new_val
     end
+
+    # Fetch the value associated with the key, along with a lock.
+    # If a value is found, then it is returned.
+    #
+    # If a value is not found and no block is given, then nil is returned.
+    #
+    # If a value is not found (or if the found value is nil and :cache_nils is false)
+    # and a block is given, the block will be invoked and its return value
+    # written to the cache and returned.
+    # rubocop:disable Metrics/AbcSize
+    # rubocop:disable Metrics/CyclomaticComplexity
+    # rubocop:disable Metrics/PerceivedComplexity
+    def fetch_with_lock(key, ttl = nil, req_options = nil)
+      req_options = {} if req_options.nil?
+      clean_req_options = cache_nils ? req_options.merge(CACHE_NILS) : req_options
+      lock_ttl, fill_lock_interval, lock_wait_end_time = get_lock_options(req_options)
+
+      req_options = clean_req_options.dup
+      req_options[:meta_flags] ||= []
+      req_options[:meta_flags] << "N#{lock_ttl}"
+
+      loop do
+        val, meta_flags = get(key, req_options)
+
+        if val && val != ''
+          return val
+        elsif meta_flags[:w]
+          new_val = yield
+          set(key, new_val, ttl_or_default(ttl), clean_req_options)
+          return new_val
+        elsif meta_flags[:z]
+          break if Time.now.to_f >= lock_wait_end_time
+        end
+
+        sleep(fill_lock_interval)
+      end
+      yield # fails to read value in wait time, yield back the value
+    end
+    # rubocop:enable Metrics/AbcSize
+    # rubocop:enable Metrics/CyclomaticComplexity
+    # rubocop:enable Metrics/PerceivedComplexity
 
     ##
     # compare and swap values using optimistic locking.
@@ -389,6 +432,22 @@ module Dalli
     end
 
     private
+
+    def get_lock_options(req_options)
+      lock_ttl = req_options.delete(:lock_ttl) || LOCK_TTL
+      fill_lock_interval = req_options.delete(:fill_lock_interval) || FILL_LOCK_INTERVAL
+
+      raise ArgumentError, 'lock_ttl must be a positive integer' if !lock_ttl.is_a?(Integer) && lock_ttl < 1
+
+      if fill_lock_interval.is_a?(Numeric) && fill_lock_interval <= 0
+        raise ArgumentError,
+              'fill_lock_interval must be a positive number'
+      end
+
+      lock_wait_end_time = Time.now.to_f + lock_ttl
+
+      [lock_ttl, fill_lock_interval, lock_wait_end_time]
+    end
 
     def check_positive!(amt)
       raise ArgumentError, "Positive values only: #{amt}" if amt.negative?
