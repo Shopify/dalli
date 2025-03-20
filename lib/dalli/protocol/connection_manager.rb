@@ -113,8 +113,7 @@ module Dalli
         return unless @sock
 
         begin
-          # Workaround for socketry/async#368
-          Thread.new { @sock.close }.join if @sock
+          @sock.close
         rescue StandardError
           nil
         end
