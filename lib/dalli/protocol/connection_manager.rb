@@ -113,7 +113,8 @@ module Dalli
         return unless @sock
 
         begin
-          @sock.close
+          # Workaround for socketry/async#368
+          Thread.new { @sock.close }.join if @sock
         rescue StandardError
           nil
         end
@@ -243,7 +244,7 @@ module Dalli
         # Close socket on a fork, setting us up for reconnect
         # on next request.
         close
-        raise Dalli::NetworkError, message
+        raise Dalli::RetryableNetworkError, message
       end
 
       def fork_detected?
