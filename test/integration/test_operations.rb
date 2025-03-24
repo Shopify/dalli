@@ -78,18 +78,52 @@ describe 'operations' do
 
         val1 = 'meta'
         dc.set('meta_key', val1)
-        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t])
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t c])
 
         assert_equal val1, val2
         # not yet hit, and last accessed 0 from set
-        assert_equal({ c: 0, l: 0, h: false, t: -1, bitflag: nil }.sort, meta_flags.sort)
+        assert meta_flags.delete(:c)
+        assert_equal({ l: 0, h: false, t: -1, bitflag: nil }.sort, meta_flags.sort)
 
         sleep 1 # we can't simulate time in memcached so we need to sleep
         # ensure hit true and last accessed 1
-        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t])
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t c])
 
         assert_equal val1, val2
-        assert_equal({ c: 0, l: 1, h: true, t: -1, bitflag: nil }.sort, meta_flags.sort)
+        assert meta_flags.delete(:c)
+        assert_equal({ l: 1, h: true, t: -1, bitflag: nil }.sort, meta_flags.sort)
+
+        assert op_addset_succeeds(dc.set('meta_key', nil))
+        assert_nil dc.get('meta_key')
+      end
+    end
+
+    it 'return the value and the sparce meta flags' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        val1 = 'meta'
+        dc.set('meta_key', val1)
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[h t])
+
+        assert_equal val1, val2
+        # not yet hit, and last accessed 0 from set
+        assert_equal({ h: false, t: -1, bitflag: nil }.sort, meta_flags.sort)
+
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h])
+
+        assert_equal val1, val2
+        assert_equal({ l: 0, h: true, bitflag: nil }.sort, meta_flags.sort)
+
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[l h t N10])
+
+        assert_equal val1, val2
+        assert_equal({ l: 0, h: true, t: -1, bitflag: nil, w: false, z: false }.sort, meta_flags.sort)
+
+        val2, meta_flags = dc.get('meta_key', meta_flags: %i[N10])
+
+        assert_equal val1, val2
+        assert_equal({ bitflag: nil, w: false, z: false }.sort, meta_flags.sort)
 
         assert op_addset_succeeds(dc.set('meta_key', nil))
         assert_nil dc.get('meta_key')
@@ -202,7 +236,7 @@ describe 'operations' do
         meta_flags = response.last
 
         assert_equal val1, val2
-        assert_equal({ c: 0, l: 0, h: true, t: 10, bitflag: nil }, meta_flags)
+        assert_equal({ l: 0, h: true, t: 10, bitflag: nil }.sort, meta_flags.sort)
 
         assert op_addset_succeeds(dc.set('meta_key', nil))
         assert_nil dc.get('meta_key')
@@ -391,6 +425,156 @@ describe 'operations' do
 
         assert_equal 'bar', res
         assert executed
+      end
+    end
+  end
+
+  describe 'fetch_with_lock' do
+    it 'uses default lock TTL and fill lock interval when no options provided' do
+      memcached_persistent do |dc|
+        dc.flush
+        start_time = Time.now.to_f
+        executed = false
+        value = dc.fetch_with_lock('lock_key') do
+          executed = true
+          'new_value'
+        end
+        end_time = Time.now.to_f
+
+        assert executed
+        assert_equal 'new_value', value
+        # Verify execution time is within expected range for default TTL
+        assert_operator (end_time - start_time), :<, Dalli::Client::LOCK_TTL
+      end
+    end
+
+    it 'respects custom lock TTL' do
+      memcached_persistent do |dc|
+        dc.flush
+        custom_ttl = 2 # shorter than default
+        start_time = Time.now.to_f
+        executed = false
+        value = dc.fetch_with_lock('lock_key', nil, { lock_ttl: custom_ttl }) do
+          executed = true
+          'new_value'
+        end
+        end_time = Time.now.to_f
+
+        assert executed
+        assert_equal 'new_value', value
+        # Verify execution time is within expected range for custom TTL
+        assert_operator (end_time - start_time), :<, custom_ttl
+      end
+    end
+
+    it 'respects custom fill lock interval' do
+      memcached_persistent do |dc|
+        dc.flush
+        custom_interval = 0.05 # longer than default
+        start_time = Time.now.to_f
+        executed = false
+        key = 'custom_fill_lock_key'
+
+        # Set up a concurrent update to force waiting
+        Thread.new do
+          dc.fetch_with_lock(key, 1) do
+            sleep(0.1) # Hold the lock briefly
+            'other_value'
+          end
+        end
+
+        # Small delay to ensure the other thread gets the lock first
+        sleep(1.5)
+
+        value = dc.fetch_with_lock(key, 1, { fill_lock_interval: custom_interval }) do
+          executed = true
+          'new_value'
+        end
+        end_time = Time.now.to_f
+
+        assert executed
+        assert_equal 'new_value', value
+        # Verify we waited at least one interval
+        assert_operator (end_time - start_time), :>, custom_interval
+      end
+    end
+
+    it 'supports both custom lock TTL and fill lock interval' do
+      memcached_persistent do |dc|
+        dc.flush
+        custom_ttl = 3
+        custom_interval = 0.05
+        executed = false
+        value = dc.fetch_with_lock('custom_lock_key', nil, {
+                                     lock_ttl: custom_ttl,
+                                     fill_lock_interval: custom_interval
+                                   }) do
+          executed = true
+          'new_value'
+        end
+
+        assert executed
+        assert_equal 'new_value', value
+        assert_equal 'new_value', dc.get('custom_lock_key')
+      end
+    end
+
+    it 'raises when givne a bad argument for both custom lock TTL and fill lock interval' do
+      memcached_persistent do |dc|
+        dc.flush
+        custom_ttl = 3
+        custom_interval = 0.05
+
+        assert_raises ArgumentError do
+          dc.fetch_with_lock('custom_lock_key', nil, {
+                               lock_ttl: 0.1,
+                               fill_lock_interval: custom_interval
+                             }) do
+            'new_value'
+          end
+        end
+
+        assert_raises ArgumentError do
+          dc.fetch_with_lock('custom_lock_key', nil, {
+                               lock_ttl: custom_ttl,
+                               fill_lock_interval: -0.1
+                             }) do
+            'new_value'
+          end
+        end
+      end
+    end
+
+    it 'times out and yields after lock TTL expires' do
+      memcached_persistent do |dc|
+        dc.flush
+        custom_ttl = 1 # Very short TTL
+        start_time = Time.now.to_f
+
+        # Set up a concurrent update that holds the lock
+        Thread.new do
+          dc.fetch_with_lock('lock_key') do
+            sleep(1.4) # Hold the lock longer than the TTL
+            'holding_value'
+          end
+        end
+
+        # Small delay to ensure the other thread gets the lock first
+        sleep(0.05)
+
+        executed = false
+        value = dc.fetch_with_lock('lock_key', nil, { lock_ttl: custom_ttl }) do
+          executed = true
+          'timeout_value'
+        end
+        end_time = Time.now.to_f
+
+        assert executed
+        assert_equal 'timeout_value', value
+        # Verify we waited at least the TTL
+        assert_operator (end_time - start_time), :>, custom_ttl
+        # But not too much longer
+        assert_operator (end_time - start_time), :<, custom_ttl + 0.1
       end
     end
   end
