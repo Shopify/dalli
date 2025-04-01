@@ -14,6 +14,7 @@ group :development, :test do
   gem 'rubocop-minitest'
   gem 'rubocop-performance'
   gem 'rubocop-rake'
+  gem 'rubocop-thread_safety'
   gem 'simplecov'
   gem 'stackprof', platform: :mri
   gem 'toxiproxy'
