@@ -11,6 +11,7 @@ jobs:
       matrix:
         ruby-version:
           - head
+          - '3.4'
           - '3.3'
           - '3.2'
         memcached-version: ['1.6.23']
