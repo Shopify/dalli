@@ -4,6 +4,7 @@ require:
   - rubocop-minitest
   - rubocop-performance
   - rubocop-rake
+  - rubocop-thread_safety
 
 AllCops:
   NewCops: enable
@@ -23,3 +24,10 @@ Style/Documentation:
 
 Metrics/MethodLength:
   Max: 20
+
+ThreadSafety:
+  Enabled: true
+  Exclude:
+    - "**/*.gemspec"
+    # exclude tests from thread safety checks
+    - test/**/*

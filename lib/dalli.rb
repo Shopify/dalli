@@ -40,7 +40,7 @@ module Dalli
   QUIET = :dalli_multi
 
   def self.logger
-    @logger ||= rails_logger || default_logger
+    @logger ||= rails_logger || default_logger # rubocop:disable ThreadSafety/ClassInstanceVariable
   end
 
   def self.rails_logger
@@ -56,7 +56,7 @@ module Dalli
   end
 
   def self.logger=(logger)
-    @logger = logger
+    @logger = logger # rubocop:disable ThreadSafety/ClassInstanceVariable
   end
 end
 
