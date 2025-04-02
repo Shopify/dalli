@@ -174,7 +174,7 @@ module Dalli
 
       def write(bytes)
         @sock.write(bytes)
-      rescue SystemCallError, *TIMEOUT_ERRORS => e
+      rescue SystemCallError, *TIMEOUT_ERRORS, IOError => e
         error_on_request!(e)
       end
 
@@ -186,7 +186,7 @@ module Dalli
 
       def flush
         @sock.flush
-      rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
+      rescue SystemCallError, *TIMEOUT_ERRORS, IOError => e
         error_on_request!(e)
       end
 
