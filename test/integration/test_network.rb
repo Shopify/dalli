@@ -49,6 +49,19 @@ describe 'Network' do
         end
       end
     end
+
+    it 'handles closed socket' do
+      toxi_memcached_persistent(MemcachedManager::TOXIPROXY_UPSTREAM_PORT, '', { socket_timeout: 1 }) do |dc|
+        dc.set('test_key', 'test_value')
+
+        # Force close the socket
+        server = dc.instance_variable_get(:@ring).servers.first
+        socket = server.instance_variable_get(:@connection_manager).sock
+        socket&.close
+
+        assert_equal 'test_value', dc.get('test_key')
+      end
+    end
   end
 
   it 'opens a standard TCP connection when ssl_context is not configured' do
