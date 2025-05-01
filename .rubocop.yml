@@ -23,7 +23,7 @@ Style/Documentation:
     - 'test/**/*'
 
 Metrics/MethodLength:
-  Max: 20
+  Max: 25
 
 ThreadSafety:
   Enabled: true
