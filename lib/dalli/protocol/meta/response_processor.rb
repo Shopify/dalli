@@ -26,6 +26,7 @@ module Dalli
         def initialize(io_source, value_marshaller)
           @io_source = io_source
           @value_marshaller = value_marshaller
+          @terminator_buffer = String.new(TERMINATOR, capacity: TERMINATOR.size)
         end
 
         def meta_get_with_value(cache_nils: false, skip_flags: false)
@@ -249,7 +250,7 @@ module Dalli
 
         def read_data(data_size)
           resp_data = @io_source.read(data_size)
-          @io_source.read(TERMINATOR.bytesize)
+          @io_source.read_to_outstring(TERMINATOR.bytesize, @terminator_buffer)
           resp_data
         end
       end

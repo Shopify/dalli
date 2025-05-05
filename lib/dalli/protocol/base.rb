@@ -151,6 +151,7 @@ module Dalli
       alias multi? quiet?
 
       # NOTE: Additional public methods should be overridden in Dalli::Threadsafe
+      ALLOWED_QUIET_OPS = %i[add replace set delete incr decr append prepend flush noop].freeze
 
       ALLOWED_QUIET_OPS = %i[add replace set delete incr decr append prepend flush noop].freeze
 
