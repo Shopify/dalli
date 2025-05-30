@@ -53,6 +53,7 @@ module Dalli
         Dalli.logger.debug { "Dalli::Server#connect #{name}" }
 
         @sock = memcached_socket
+        @sock.sync = false
         @pid = PIDCache.pid
         @request_in_progress = false
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError, SocketError => e

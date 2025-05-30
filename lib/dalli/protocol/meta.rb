@@ -256,6 +256,7 @@ module Dalli
 
       def write_noop
         write(RequestFormatter.meta_noop)
+        @connection_manager.flush
       end
 
       def authenticate_connection
