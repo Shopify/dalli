@@ -31,3 +31,6 @@ ThreadSafety:
     - "**/*.gemspec"
     # exclude tests from thread safety checks
     - test/**/*
+
+Naming/PredicateMethod:
+  Enabled: false
