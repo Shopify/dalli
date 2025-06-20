@@ -77,8 +77,10 @@ module Dalli
           value = @connection_manager.read_exact(tokens[1].to_i)
           bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
           @connection_manager.read_exact(terminator_length) # read the terminator
-          results[tokens[key_index].byteslice(1..-1)] =
-            @value_marshaller.retrieve(value, bitflags)
+          key = tokens[key_index]&.byteslice(1..-1)
+          next if key.nil?
+
+          results[key] = @value_marshaller.retrieve(value, bitflags)
         end
         results
       end
