@@ -101,6 +101,7 @@ module Dalli
         else
           write(RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_options))
         end
+        @connection_manager.flush
         if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
           response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
         elsif meta_options
@@ -124,6 +125,7 @@ module Dalli
         req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
                                         meta_flags: meta_flag_options(options))
         write(req)
+        @connection_manager.flush
         if meta_flag_options(options)
           response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
         else
@@ -136,6 +138,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
         write(req)
+        @connection_manager.flush
         response_processor.meta_get_without_value
       end
 
@@ -145,6 +148,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64)
         write(req)
+        @connection_manager.flush
         response_processor.meta_get_with_value_and_cas
       end
 
@@ -175,6 +179,7 @@ module Dalli
         write(req)
         write(value)
         write(TERMINATOR)
+        @connection_manager.flush
       end
       # rubocop:enable Metrics/ParameterLists
 
@@ -197,6 +202,7 @@ module Dalli
         write(req)
         write(value)
         write(TERMINATOR)
+        @connection_manager.flush
       end
       # rubocop:enable Metrics/ParameterLists
 
@@ -206,6 +212,7 @@ module Dalli
         req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                            base64: base64, quiet: quiet?)
         write(req)
+        @connection_manager.flush
         response_processor.meta_delete unless quiet?
       end
 
@@ -223,12 +230,14 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
                                                quiet: quiet?, base64: base64))
+        @connection_manager.flush
         response_processor.decr_incr unless quiet?
       end
 
       # Other Commands
       def flush(delay = 0)
         write(RequestFormatter.flush(delay: delay))
+        @connection_manager.flush
         response_processor.flush unless quiet?
       end
 
@@ -236,26 +245,31 @@ module Dalli
       # We need to read all the responses at once.
       def noop
         write_noop
+        @connection_manager.flush
         response_processor.consume_all_responses_until_mn
       end
 
       def stats(info = nil)
         write(RequestFormatter.stats(info))
+        @connection_manager.flush
         response_processor.stats
       end
 
       def reset_stats
         write(RequestFormatter.stats('reset'))
+        @connection_manager.flush
         response_processor.reset
       end
 
       def version
         write(RequestFormatter.version)
+        @connection_manager.flush
         response_processor.version
       end
 
       def write_noop
         write(RequestFormatter.meta_noop)
+        @connection_manager.flush
       end
 
       def authenticate_connection
