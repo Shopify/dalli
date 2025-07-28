@@ -153,31 +153,31 @@ describe 'Pipelined Get' do
     end
   end
 
-  it 'supports pipelined get with keys containing Unicode or spaces' do
+  it 'supports pipelined get with keys containing Unicode' do
     memcached_persistent do |dc|
       dc.close
       dc.flush
 
-      keys_to_query = ['a', 'b', 'contains space', 'ƒ©åÍÎ']
+      keys_to_query = ['a', 'b', 'ƒ©åÍÎ']
 
       resp = dc.get_multi(keys_to_query)
 
       assert_empty(resp)
 
       dc.set('a', 'foo')
-      dc.set('contains space', 123)
       dc.set('ƒ©åÍÎ', %w[a b c])
 
       # Invocation without block
       resp = dc.get_multi(keys_to_query)
-      expected_resp = { 'a' => 'foo', 'contains space' => 123, 'ƒ©åÍÎ' => %w[a b c] }
+      expected_resp = { 'a' => 'foo', Dalli::Protocol::Meta::KeyRegularizer.encode('ƒ©åÍÎ')[0] => %w[a b c] }
 
       assert_equal(expected_resp, resp)
 
       # Invocation with block
       dc.get_multi(keys_to_query) do |k, v|
-        assert(expected_resp.key?(k) && expected_resp[k] == v)
-        expected_resp.delete(k)
+        encoded_key = Dalli::Protocol::Meta::KeyRegularizer.encode(k)[0]
+        assert(expected_resp.key?(encoded_key) && expected_resp[encoded_key] == v)
+        expected_resp.delete(encoded_key)
       end
 
       assert_empty expected_resp

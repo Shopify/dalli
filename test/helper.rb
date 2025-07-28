@@ -12,9 +12,16 @@ require 'logger'
 require 'securerandom'
 require 'toxiproxy'
 require 'debug'
+require 'opentelemetry/sdk'
 
 Dalli.logger = Logger.new($stdout)
 Dalli.logger.level = Logger::ERROR
+
+OTEL_EXPORTER = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+
+OpenTelemetry::SDK.configure do |c|
+  c.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(OTEL_EXPORTER))
+end
 
 # Checks if memcached is installed and loads the version,
 # supported protocols
