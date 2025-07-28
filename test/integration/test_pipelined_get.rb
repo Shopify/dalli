@@ -176,6 +176,7 @@ describe 'Pipelined Get' do
       # Invocation with block
       dc.get_multi(keys_to_query) do |k, v|
         encoded_key = Dalli::Protocol::Meta::KeyRegularizer.encode(k)[0]
+
         assert(expected_resp.key?(encoded_key) && expected_resp[encoded_key] == v)
         expected_resp.delete(encoded_key)
       end

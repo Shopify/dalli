@@ -25,6 +25,7 @@ describe 'Instrumentation' do
       assert_equal 'test_value', @client.get('test_key')
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -41,6 +42,7 @@ describe 'Instrumentation' do
       @client.set('test_key', 'test_value', 300)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -61,6 +63,7 @@ describe 'Instrumentation' do
       @client.add('new_key', 'new_value', 600)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -79,6 +82,7 @@ describe 'Instrumentation' do
       @client.replace('existing_key', 'new_value', 400)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -97,6 +101,7 @@ describe 'Instrumentation' do
       @client.delete('delete_key')
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -115,6 +120,7 @@ describe 'Instrumentation' do
       @client.append('append_key', ' world')
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -132,6 +138,7 @@ describe 'Instrumentation' do
       @client.prepend('prepend_key', 'hello ')
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -169,6 +176,7 @@ describe 'Instrumentation' do
       assert_equal 17, @client.decr('counter', 3, 1800, 0)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -189,6 +197,7 @@ describe 'Instrumentation' do
       @client.flush(10)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size # number of servers in the ring in test
 
       span = spans.first
@@ -205,6 +214,7 @@ describe 'Instrumentation' do
       @client.version
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size # number of servers in the ring in test
 
       span = spans.first
@@ -224,6 +234,7 @@ describe 'Instrumentation' do
 
       assert_equal({ 'key1' => 'value1', 'key2' => 'value2', 'key3' => 'value3' }, result)
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
@@ -241,6 +252,7 @@ describe 'Instrumentation' do
       @client.set_multi(pairs, 7200)
 
       spans = OTEL_EXPORTER.finished_spans
+
       assert_equal 1, spans.size
 
       span = spans.first
