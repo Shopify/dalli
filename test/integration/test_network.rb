@@ -230,7 +230,7 @@ describe 'Network' do
       resp = dc.flush
 
       refute_nil resp
-      assert_equal [true, true], resp
+      assert_equal [true], resp
 
       assert op_addset_succeeds(dc.set(:foo, 'bar'))
       assert_equal 'bar', dc.get(:foo)

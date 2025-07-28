@@ -48,7 +48,7 @@ module MemcachedManager
 
   def self.client_for_port_or_socket(port_or_socket, client_options)
     is_unix = port_or_socket.to_i.zero?
-    servers_arg = is_unix ? port_or_socket : ["localhost:#{port_or_socket}", "127.0.0.1:#{port_or_socket}"]
+    servers_arg = is_unix ? port_or_socket : ["127.0.0.1:#{port_or_socket}"]
     Dalli::Client.new(servers_arg, client_options)
   end
 

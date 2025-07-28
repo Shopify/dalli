@@ -207,7 +207,7 @@ describe 'Quiet behavior' do
         # Response should be a non-empty array of nils
         arr = dc.flush(90)
 
-        assert_equal 2, arr.size
+        assert_equal 1, arr.size
         assert arr.all?(&:nil?)
       end
 
