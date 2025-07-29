@@ -52,6 +52,7 @@ describe 'Instrumentation' do
       assert_equal 'memcached', span.attributes['db.system']
       assert_equal 'test_key', span.attributes['keys']
       assert_equal 300, span.attributes['ttl']
+      assert_equal Marshal.dump('test_value').bytesize, span.attributes['value_size']
     end
   end
 
@@ -241,6 +242,8 @@ describe 'Instrumentation' do
 
       assert_equal 'memcached.read_multi', span.name
       assert_equal %w[key1 key2 key3], span.attributes['keys']
+      assert_equal 3, span.attributes['hit_count']
+      assert_equal 0, span.attributes['miss_count']
     end
   end
 
@@ -259,6 +262,7 @@ describe 'Instrumentation' do
 
       assert_equal 'memcached.write_multi', span.name
       assert_equal %w[multi1 multi2 multi3], span.attributes['keys']
+      assert_equal 48, span.attributes['value_size']
       assert_equal 7200, span.attributes['ttl']
     end
   end

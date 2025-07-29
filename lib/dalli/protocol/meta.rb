@@ -57,7 +57,7 @@ module Dalli
             @connection_manager.write(TERMINATOR)
           end
 
-          span.set_attribute('value_bytesize', total_value_bytesize)
+          span.set_attribute('value_size', total_value_bytesize)
 
           write_noop
           @connection_manager.flush
@@ -101,6 +101,8 @@ module Dalli
             results[key] = @value_marshaller.retrieve(value, bitflags)
           end
           span.set_attribute('value_bytesize', total_value_bytesize)
+          span.set_attribute('hit_count', results.size)
+          span.set_attribute('miss_count', keys.size - results.size)
         end
         results
       end
@@ -117,7 +119,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
 
-        Dalli::Instrumentation.instrument('get', tags: { 'keys' => key }) do |_span|
+        Dalli::Instrumentation.instrument('get', tags: { 'keys' => key }) do
           if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             write("mg #{encoded_key} v\r\n")
           else
