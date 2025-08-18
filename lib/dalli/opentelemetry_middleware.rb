@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'opentelemetry'
+
 module Dalli
   # Middleware to add OpenTelemetry spans to Dalli operations.
   module OpentelemetryMiddleware
@@ -12,32 +14,36 @@ module Dalli
     def storage_req(operation, tags = {})
       TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
-        yield attributes
+        result = yield attributes
         span.add_attributes(attributes)
+        result
       end
     end
 
     def retrieve_req(operation, tags = {})
       TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
-        yield attributes
+        result = yield attributes
         span.add_attributes(attributes)
+        result
       end
     end
 
     def storage_req_pipeline(operation, tags = {})
       TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
-        yield attributes
+        result = yield attributes
         span.add_attributes(attributes)
+        result
       end
     end
 
     def retrieve_req_pipeline(operation, tags = {})
       TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
-        yield attributes
+        result = yield attributes
         span.add_attributes(attributes)
+        result
       end
     end
   end
