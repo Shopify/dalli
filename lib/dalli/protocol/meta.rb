@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'dalli/instrumentation'
 require 'forwardable'
 require 'socket'
 require 'timeout'
@@ -29,15 +28,11 @@ module Dalli
       def write_multi_storage_req(pairs, ttl = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
 
-        Dalli::Instrumentation.instrument(
-          'write_multi',
-          tags: {
-            'keys' => pairs.keys,
-            'ttl' => ttl
-          }
-        ) do |span|
+        @middlewares_stack.storage_req_pipeline('setq', {
+                                                  'keys' => pairs.keys,
+                                                  'ttl' => ttl
+                                                }) do |attributes|
           total_value_bytesize = 0
-
           pairs.each do |key, raw_value|
             (value, bitflags) = @value_marshaller.store(key, raw_value, options)
             encoded_key, _base64 = KeyRegularizer.encode(key)
@@ -56,8 +51,7 @@ module Dalli
             @connection_manager.write(value)
             @connection_manager.write(TERMINATOR)
           end
-
-          span.set_attribute('value_size', total_value_bytesize)
+          attributes['value_size'] = total_value_bytesize unless attributes.frozen?
 
           write_noop
           @connection_manager.flush
@@ -76,7 +70,7 @@ module Dalli
         key_index = optimized_for_raw ? 2 : 3
 
         total_value_bytesize = 0
-        Dalli::Instrumentation.instrument('read_multi', tags: { 'keys' => keys }) do |span|
+        @middlewares_stack.retrieve_req_pipeline('getq', { 'keys' => keys }) do |attributes|
           post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
           keys.each do |key|
             @connection_manager.write("mg #{key} #{post_get_req}")
@@ -100,10 +94,14 @@ module Dalli
             total_value_bytesize += value.bytesize
             results[key] = @value_marshaller.retrieve(value, bitflags)
           end
-          span.set_attribute('value_bytesize', total_value_bytesize)
-          span.set_attribute('hit_count', results.size)
-          span.set_attribute('miss_count', keys.size - results.size)
+
+          unless attributes.frozen?
+            attributes['value_bytesize'] = total_value_bytesize
+            attributes['hit_count'] = results.size
+            attributes['miss_count'] = keys.size - results.size
+          end
         end
+
         results
       end
       # rubocop:enable Metrics/AbcSize
@@ -119,7 +117,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
 
-        Dalli::Instrumentation.instrument('get', tags: { 'keys' => key }) do
+        @middlewares_stack.retrieve_req('get', { 'keys' => key }) do
           if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             write("mg #{encoded_key} v\r\n")
           else
@@ -141,8 +139,7 @@ module Dalli
 
       def quiet_get_request(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
-
-        Dalli::Instrumentation.instrument('quiet_get', tags: { 'keys' => key }) do |_span|
+        @middlewares_stack.retrieve_req('getq', { 'keys' => key }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true)
         end
       end
@@ -151,7 +148,7 @@ module Dalli
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        Dalli::Instrumentation.instrument('gat', tags: { 'keys' => key, 'ttl' => ttl }) do |_span|
+        @middlewares_stack.retrieve_req('gat', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
                                           meta_flags: meta_flag_options(options))
           write(req)
@@ -168,7 +165,7 @@ module Dalli
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        Dalli::Instrumentation.instrument('touch', tags: { 'keys' => key, 'ttl' => ttl }) do |_span|
+        @middlewares_stack.retrieve_req('touch', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
@@ -181,7 +178,7 @@ module Dalli
       def cas(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        Dalli::Instrumentation.instrument('cas', tags: { 'keys' => key }) do |_span|
+        @middlewares_stack.retrieve_req('cas', { 'keys' => key }) do
           req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64)
           write(req)
           @connection_manager.flush
@@ -207,8 +204,7 @@ module Dalli
         (value, bitflags) = @value_marshaller.store(key, raw_value, options)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
-        Dalli::Instrumentation.instrument(mode,
-                                          tags: { 'keys' => key, 'value_size' => value.bytesize, 'ttl' => ttl }) do
+        @middlewares_stack.storage_req(mode.to_s, { 'keys' => key, 'value_size' => value.bytesize, 'ttl' => ttl }) do
           req = RequestFormatter.meta_set(key: encoded_key, value: value,
                                           bitflags: bitflags, cas: cas,
                                           ttl: ttl, mode: mode, quiet: quiet?, base64: base64)
@@ -223,14 +219,14 @@ module Dalli
       # rubocop:enable Metrics/ParameterLists
 
       def append(key, value)
-        Dalli::Instrumentation.instrument('append', tags: { 'keys' => key, 'value_size' => value.bytesize }) do
+        @middlewares_stack.storage_req('append', { 'keys' => key, 'value_size' => value.bytesize }) do
           write_append_prepend_req(:append, key, value)
           response_processor.meta_set_append_prepend unless quiet?
         end
       end
 
       def prepend(key, value)
-        Dalli::Instrumentation.instrument('prepend', tags: { 'keys' => key, 'value_size' => value.bytesize }) do
+        @middlewares_stack.storage_req('prepend', { 'keys' => key, 'value_size' => value.bytesize }) do
           write_append_prepend_req(:prepend, key, value)
           response_processor.meta_set_append_prepend unless quiet?
         end
@@ -252,7 +248,7 @@ module Dalli
       # Delete Commands
       def delete(key, cas)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        Dalli::Instrumentation.instrument('delete', tags: { 'keys' => key, 'cas' => cas }) do
+        @middlewares_stack.storage_req('delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                              base64: base64, quiet: quiet?)
           write(req)
@@ -274,9 +270,8 @@ module Dalli
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        Dalli::Instrumentation.instrument('decr_incr',
-                                          tags: { 'keys' => key, 'delta' => delta, 'ttl' => ttl || 0,
-                                                  'initial' => initial || 0, 'incr' => incr }) do
+        @middlewares_stack.storage_req('decr_incr', { 'keys' => key, 'delta' => delta, 'ttl' => ttl || 0,
+                                                      'initial' => initial || 0, 'incr' => incr }) do
           write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
                                                  quiet: quiet?, base64: base64))
           @connection_manager.flush
@@ -286,7 +281,7 @@ module Dalli
 
       # Other Commands
       def flush(delay = 0)
-        Dalli::Instrumentation.instrument('flush', tags: { 'delay' => delay }) do
+        @middlewares_stack.storage_req('flush', { 'delay' => delay }) do
           write(RequestFormatter.flush(delay: delay))
           @connection_manager.flush
           response_processor.flush unless quiet?
@@ -314,7 +309,7 @@ module Dalli
       end
 
       def version
-        Dalli::Instrumentation.instrument('version') do
+        @middlewares_stack.retrieve_req('version') do
           write(RequestFormatter.version)
           @connection_manager.flush
           response_processor.version

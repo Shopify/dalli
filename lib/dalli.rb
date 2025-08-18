@@ -58,9 +58,14 @@ module Dalli
   def self.logger=(logger)
     @logger = logger # rubocop:disable ThreadSafety/ClassInstanceVariable
   end
+
+  def self.register(middleware)
+    Middlewares.include(middleware)
+  end
 end
 
 require_relative 'dalli/version'
+require_relative 'dalli/middlewares'
 
 require_relative 'dalli/compressor'
 require_relative 'dalli/client'

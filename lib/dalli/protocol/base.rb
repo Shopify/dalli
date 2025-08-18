@@ -25,7 +25,17 @@ module Dalli
         @options = client_options.merge(user_creds)
         @value_marshaller = ValueMarshaller.new(@options)
         @key_manager = KeyManager.new(@options)
+        @middlewares_stack = Dalli::Middlewares
         @connection_manager = ConnectionManager.new(hostname, port, socket_type, @options)
+
+        middlewares_stack = Dalli::Middlewares
+        unless @options[:middlewares].nil?
+          middlewares_stack = Class.new(Dalli::Middlewares)
+          @options[:middlewares].each do |mod|
+            middlewares_stack.include(mod)
+          end
+        end
+        @middlewares_stack = middlewares_stack.new
       end
 
       # Chokepoint method for error handling and ensuring liveness

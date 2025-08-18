@@ -34,6 +34,3 @@ ThreadSafety:
 
 Naming/PredicateName:
   Enabled: false
-
-Naming/PredicateMethod:
-  Enabled: false
