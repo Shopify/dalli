@@ -58,9 +58,14 @@ module Dalli
   def self.logger=(logger)
     @logger = logger # rubocop:disable ThreadSafety/ClassInstanceVariable
   end
+
+  def self.register(middleware)
+    Middlewares.include(middleware)
+  end
 end
 
 require_relative 'dalli/version'
+require_relative 'dalli/middlewares'
 
 require_relative 'dalli/compressor'
 require_relative 'dalli/client'
@@ -81,3 +86,4 @@ require_relative 'dalli/protocol/value_serializer'
 require_relative 'dalli/servers_arg_normalizer'
 require_relative 'dalli/socket'
 require_relative 'dalli/options'
+require_relative 'dalli/opentelemetry_middleware'

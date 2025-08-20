@@ -32,5 +32,8 @@ ThreadSafety:
     # exclude tests from thread safety checks
     - test/**/*
 
+Naming/PredicateName:
+  Enabled: false
+
 Naming/PredicateMethod:
   Enabled: false

@@ -51,6 +51,7 @@ module Dalli
     ##
     class SSLSocket < ::OpenSSL::SSL::SSLSocket
       include Dalli::Socket::InstanceMethods
+
       def options
         io.options
       end
@@ -73,6 +74,7 @@ module Dalli
     ##
     class TCP < TCPSocket
       include Dalli::Socket::InstanceMethods
+
       # options - supports enhanced logging in the case of a timeout
       attr_accessor :options
 
