@@ -41,8 +41,8 @@ describe 'Middlewares' do
       middleware_stack = dc.send(:ring).servers.first.instance_variable_get(:@middlewares_stack)
       calls = middleware_stack.recorded_calls
 
-      assert(calls.any? { |t, op, _| t == :storage_req && op == 'set' })
-      assert(calls.any? { |t, op, _| t == :retrieve_req && op == 'get' })
+      assert(calls.any? { |t, op, _| t == :storage_req && op == 'write' })
+      assert(calls.any? { |t, op, _| t == :retrieve_req && op == 'read' })
     end
   end
 
@@ -54,8 +54,8 @@ describe 'Middlewares' do
       middleware_stack = dc.send(:ring).servers.first.instance_variable_get(:@middlewares_stack)
       calls = middleware_stack.recorded_calls
 
-      assert(calls.any? { |t, op, _| t == :storage_req_pipeline && op == 'setq' })
-      assert(calls.any? { |t, op, _| t == :retrieve_req_pipeline && op == 'getq' })
+      assert(calls.any? { |t, op, _| t == :storage_req_pipeline && op == 'write_multi' })
+      assert(calls.any? { |t, op, _| t == :retrieve_req_pipeline && op == 'read_multi' })
     end
   end
 end

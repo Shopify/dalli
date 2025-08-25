@@ -12,7 +12,7 @@ module Dalli
     }.freeze
 
     def storage_req(operation, tags = {})
-      TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
+      TRACER.in_span(operation, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
         result = yield attributes
         span.add_attributes(attributes)
@@ -21,7 +21,7 @@ module Dalli
     end
 
     def retrieve_req(operation, tags = {})
-      TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
+      TRACER.in_span(operation, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
         result = yield attributes
         span.add_attributes(attributes)
@@ -30,7 +30,7 @@ module Dalli
     end
 
     def storage_req_pipeline(operation, tags = {})
-      TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
+      TRACER.in_span(operation, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
         result = yield attributes
         span.add_attributes(attributes)
@@ -39,7 +39,7 @@ module Dalli
     end
 
     def retrieve_req_pipeline(operation, tags = {})
-      TRACER.in_span(operation.to_s, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
+      TRACER.in_span(operation, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}
         result = yield attributes
         span.add_attributes(attributes)
