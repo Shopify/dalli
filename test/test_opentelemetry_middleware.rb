@@ -14,8 +14,8 @@ describe 'OpenTelemetry middleware' do
       finished = OTEL_EXPORTER.respond_to?(:finished_spans) ? OTEL_EXPORTER.finished_spans : []
       names = finished.map(&:name)
 
-      assert_includes names, 'set', "expected a 'set' span, got: #{names.inspect}"
-      assert_includes names, 'get', "expected a 'get' span, got: #{names.inspect}"
+      assert_includes names, 'write', "expected a 'write' span, got: #{names.inspect}"
+      assert_includes names, 'read', "expected a 'read' span, got: #{names.inspect}"
     end
   end
 end

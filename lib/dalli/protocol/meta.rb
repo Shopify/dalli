@@ -28,7 +28,7 @@ module Dalli
       def write_multi_storage_req(pairs, ttl = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
 
-        @middlewares_stack.storage_req_pipeline('setq', {
+        @middlewares_stack.storage_req_pipeline('write_multi', {
                                                   'keys' => pairs.keys,
                                                   'ttl' => ttl
                                                 }) do |attributes|
@@ -70,7 +70,7 @@ module Dalli
         key_index = optimized_for_raw ? 2 : 3
 
         total_value_bytesize = 0
-        @middlewares_stack.retrieve_req_pipeline('getq', { 'keys' => keys }) do |attributes|
+        @middlewares_stack.retrieve_req_pipeline('read_multi', { 'keys' => keys }) do |attributes|
           post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
           keys.each do |key|
             @connection_manager.write("mg #{key} #{post_get_req}")
@@ -117,7 +117,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
 
-        @middlewares_stack.retrieve_req('get', { 'keys' => key }) do
+        @middlewares_stack.retrieve_req('read', { 'keys' => key }) do
           if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             write("mg #{encoded_key} v\r\n")
           else
@@ -139,7 +139,7 @@ module Dalli
 
       def quiet_get_request(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        @middlewares_stack.retrieve_req('getq', { 'keys' => key }) do
+        @middlewares_stack.retrieve_req('read', { 'keys' => key, 'quiet' => true }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true)
         end
       end
@@ -188,7 +188,7 @@ module Dalli
 
       # Storage Commands
       def set(key, value, ttl, cas, options)
-        do_storage_req(:set, key, value, ttl, cas, options)
+        do_storage_req(:write, key, value, ttl, cas, options)
       end
 
       def add(key, value, ttl, options)
@@ -270,8 +270,15 @@ module Dalli
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        @middlewares_stack.storage_req('decr_incr', { 'keys' => key, 'delta' => delta, 'ttl' => ttl || 0,
-                                                      'initial' => initial || 0, 'incr' => incr }) do
+        @middlewares_stack.storage_req(
+          incr ? 'incr' : 'decr',
+          {
+            'keys' => key,
+            'delta' => delta,
+            'ttl' => ttl || 0,
+            'initial' => initial || 0
+          }
+        ) do
           write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
                                                  quiet: quiet?, base64: base64))
           @connection_manager.flush
