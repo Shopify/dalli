@@ -28,7 +28,7 @@ module Dalli
       def write_multi_storage_req(pairs, ttl = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
 
-        @middlewares_stack.storage_req_pipeline('write_multi', {
+        @middlewares_stack.storage_req_pipeline('memcached.write_multi', {
                                                   'keys' => pairs.keys,
                                                   'ttl' => ttl
                                                 }) do |attributes|
@@ -70,7 +70,7 @@ module Dalli
         key_index = optimized_for_raw ? 2 : 3
 
         total_value_bytesize = 0
-        @middlewares_stack.retrieve_req_pipeline('read_multi', { 'keys' => keys }) do |attributes|
+        @middlewares_stack.retrieve_req_pipeline('memcached.read_multi', { 'keys' => keys }) do |attributes|
           post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
           keys.each do |key|
             @connection_manager.write("mg #{key} #{post_get_req}")
@@ -117,7 +117,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
 
-        @middlewares_stack.retrieve_req('read', { 'keys' => key }) do
+        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do
           if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             write("mg #{encoded_key} v\r\n")
           else
@@ -139,7 +139,7 @@ module Dalli
 
       def quiet_get_request(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        @middlewares_stack.retrieve_req('read', { 'keys' => key, 'quiet' => true }) do
+        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'quiet' => true }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true)
         end
       end
@@ -148,7 +148,7 @@ module Dalli
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        @middlewares_stack.retrieve_req('gat', { 'keys' => key, 'ttl' => ttl }) do
+        @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
                                           meta_flags: meta_flag_options(options))
           write(req)
@@ -165,7 +165,7 @@ module Dalli
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        @middlewares_stack.retrieve_req('touch', { 'keys' => key, 'ttl' => ttl }) do
+        @middlewares_stack.retrieve_req('memcached.touch', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
@@ -178,7 +178,7 @@ module Dalli
       def cas(key)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        @middlewares_stack.retrieve_req('cas', { 'keys' => key }) do
+        @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
           req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64)
           write(req)
           @connection_manager.flush
@@ -204,10 +204,20 @@ module Dalli
         (value, bitflags) = @value_marshaller.store(key, raw_value, options)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
-        @middlewares_stack.storage_req(mode.to_s, { 'keys' => key, 'value_size' => value.bytesize, 'ttl' => ttl }) do
-          req = RequestFormatter.meta_set(key: encoded_key, value: value,
-                                          bitflags: bitflags, cas: cas,
-                                          ttl: ttl, mode: mode, quiet: quiet?, base64: base64)
+        @middlewares_stack.storage_req(
+          "memcached.#{mode}",
+          { 'keys' => key, 'value_size' => value.bytesize, 'ttl' => ttl }
+        ) do
+          req = RequestFormatter.meta_set(
+            key: encoded_key,
+            value: value,
+            bitflags: bitflags,
+            cas: cas,
+            ttl: ttl,
+            mode: mode,
+            quiet: quiet?,
+            base64: base64
+          )
           write(req)
           write(value)
           write(TERMINATOR)
@@ -219,14 +229,14 @@ module Dalli
       # rubocop:enable Metrics/ParameterLists
 
       def append(key, value)
-        @middlewares_stack.storage_req('append', { 'keys' => key, 'value_size' => value.bytesize }) do
+        @middlewares_stack.storage_req('memcached.append', { 'keys' => key, 'value_size' => value.bytesize }) do
           write_append_prepend_req(:append, key, value)
           response_processor.meta_set_append_prepend unless quiet?
         end
       end
 
       def prepend(key, value)
-        @middlewares_stack.storage_req('prepend', { 'keys' => key, 'value_size' => value.bytesize }) do
+        @middlewares_stack.storage_req('memcached.prepend', { 'keys' => key, 'value_size' => value.bytesize }) do
           write_append_prepend_req(:prepend, key, value)
           response_processor.meta_set_append_prepend unless quiet?
         end
@@ -248,7 +258,7 @@ module Dalli
       # Delete Commands
       def delete(key, cas)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        @middlewares_stack.storage_req('delete', { 'keys' => key, 'cas' => cas }) do
+        @middlewares_stack.storage_req('memcached.delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                              base64: base64, quiet: quiet?)
           write(req)
@@ -271,7 +281,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
 
         @middlewares_stack.storage_req(
-          incr ? 'incr' : 'decr',
+          incr ? 'memcached.incr' : 'memcached.decr',
           {
             'keys' => key,
             'delta' => delta,
@@ -288,7 +298,7 @@ module Dalli
 
       # Other Commands
       def flush(delay = 0)
-        @middlewares_stack.storage_req('flush', { 'delay' => delay }) do
+        @middlewares_stack.storage_req('memcached.flush', { 'delay' => delay }) do
           write(RequestFormatter.flush(delay: delay))
           @connection_manager.flush
           response_processor.flush unless quiet?
@@ -316,7 +326,7 @@ module Dalli
       end
 
       def version
-        @middlewares_stack.retrieve_req('version') do
+        @middlewares_stack.retrieve_req('memcached.version') do
           write(RequestFormatter.version)
           @connection_manager.flush
           response_processor.version
