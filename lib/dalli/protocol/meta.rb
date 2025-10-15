@@ -117,27 +117,20 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
 
-        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
+        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do
           if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             write("mg #{encoded_key} v\r\n")
           else
             write(RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_options))
           end
           @connection_manager.flush
-          result = if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
+          if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
             response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
           elsif meta_options
             response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
           else
             response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
           end
-          unless attributes.frozen?
-            value = result.is_a?(Array) ? result.first : result
-            attributes['value_bytesize'] = value.nil? ? 0 : value.bytesize
-            attributes['hit_count'] = value.nil? ? 0 : 1
-            attributes['miss_count'] = value.nil? ? 1 : 0
-          end
-          result
         end
       end
       # rubocop:enable Metrics/AbcSize
@@ -155,23 +148,16 @@ module Dalli
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
 
-        @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
+        @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
                                           meta_flags: meta_flag_options(options))
           write(req)
           @connection_manager.flush
-          result = if meta_flag_options(options)
+          if meta_flag_options(options)
             response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
           else
             response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
           end
-          unless attributes.frozen?
-            value = result.is_a?(Array) ? result.first : result
-            attributes['value_bytesize'] = value.nil? ? 0 : value.bytesize
-            attributes['hit_count'] = value.nil? ? 0 : 1
-            attributes['miss_count'] = value.nil? ? 1 : 0
-          end
-          result
         end
       end
 
