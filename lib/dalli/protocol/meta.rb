@@ -125,12 +125,12 @@ module Dalli
           end
           @connection_manager.flush
           result = if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
-            response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
-          elsif meta_options
-            response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
-          else
-            response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
-          end
+                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+                   elsif meta_options
+                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                   else
+                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                   end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
             attributes['value_bytesize'] = value.nil? ? 0 : value.bytesize
@@ -161,10 +161,10 @@ module Dalli
           write(req)
           @connection_manager.flush
           result = if meta_flag_options(options)
-            response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
-          else
-            response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
-          end
+                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                   else
+                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                   end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
             attributes['value_bytesize'] = value.nil? ? 0 : value.bytesize

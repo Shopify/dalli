@@ -25,14 +25,24 @@ Style/Documentation:
 Metrics/MethodLength:
   Max: 25
 
-ThreadSafety:
+ThreadSafety/ClassInstanceVariable:
   Enabled: true
   Exclude:
     - "**/*.gemspec"
     # exclude tests from thread safety checks
     - test/**/*
 
-Naming/PredicateName:
+ThreadSafety/NewThread:
+  Exclude:
+    # Tests need to create threads to test concurrent behavior
+    - test/**/*
+
+ThreadSafety/MutableClassInstanceVariable:
+  Exclude:
+    # Test utilities need mutable class variables
+    - test/**/*
+
+Naming/PredicatePrefix:
   Enabled: false
 
 Naming/PredicateMethod:

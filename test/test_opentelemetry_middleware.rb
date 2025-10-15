@@ -59,6 +59,7 @@ describe 'OpenTelemetry middleware' do
       refute_nil read_span, 'expected to find a memcached.read span'
 
       attributes = read_span.attributes
+
       assert_equal 0, attributes['value_bytesize'], 'expected value_bytesize to be 0 for cache miss'
       assert_equal 0, attributes['hit_count'], 'expected hit_count to be 0 for cache miss'
       assert_equal 1, attributes['miss_count'], 'expected miss_count to be 1 for cache miss'
