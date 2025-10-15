@@ -104,10 +104,58 @@ module Dalli
 
         results
       end
-      # rubocop:enable Metrics/AbcSize
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
+
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/PerceivedComplexity
+      def delete_multi_req(keys)
+        results = {}
+        encoded_keys = []
+
+        @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
+          keys.each do |key|
+            encoded_key, base64 = KeyRegularizer.encode(key)
+            encoded_keys << encoded_key
+            req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true)
+            write(req)
+          end
+          write("mn\r\n")
+          @connection_manager.flush
+
+          # In quiet mode, successful deletes return nothing, only failures respond
+          # Track which keys got NF (not found) responses
+          not_found_keys = []
+
+          # Read responses
+          while (line = @connection_manager.readline)
+            # Debug output - remove this in production
+            # puts "DEBUG delete_multi response line: #{line.inspect}"
+
+            break if line == TERMINATOR || line[0, 2] == 'MN'
+
+            # In quiet mode, we only get NF responses for keys that weren't found
+            next unless line.start_with?('NF ')
+
+            # Extract key from response (after 'NF ' and remove 'k' prefix if present)
+            tokens = line.split
+            response_key = tokens[1]
+            # Response format is "NF k<key>" where k is a literal 'k'
+            response_key = response_key[1..] if response_key&.start_with?('k')
+            not_found_keys << response_key
+          end
+
+          # Build results with encoded keys (consistent with get_multi behavior)
+          encoded_keys.each do |encoded_key|
+            results[encoded_key] = !not_found_keys.include?(encoded_key)
+          end
+        end
+        results
+      end
+      # rubocop:enable Metrics/AbcSize
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/PerceivedComplexity
 
       # Retrieval Commands
       # rubocop:disable Metrics/AbcSize
