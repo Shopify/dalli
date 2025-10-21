@@ -104,10 +104,31 @@ module Dalli
 
         results
       end
-      # rubocop:enable Metrics/AbcSize
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
+
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/PerceivedComplexity
+      def delete_multi_req(keys)
+        encoded_keys = []
+
+        @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
+          keys.each do |key|
+            encoded_key, base64 = KeyRegularizer.encode(key)
+            encoded_keys << encoded_key
+            req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true)
+            write(req)
+          end
+          write_noop
+          @connection_manager.flush
+
+          response_processor.consume_all_responses_until_mn
+        end
+      end
+      # rubocop:enable Metrics/AbcSize
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/PerceivedComplexity
 
       # Retrieval Commands
       # rubocop:disable Metrics/AbcSize
