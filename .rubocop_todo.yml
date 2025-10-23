@@ -14,14 +14,14 @@ Metrics/AbcSize:
 # Offense count: 8
 # Configuration parameters: CountComments, CountAsOne.
 Metrics/ClassLength:
-  Max: 250
+  Max: 300
 
 # Offense count: 4
 # Configuration parameters: CountComments, CountAsOne, ExcludedMethods, IgnoredMethods.
 Metrics/MethodLength:
   Exclude:
-    - 'lib/dalli/pipelined_getter.rb'
-    - 'lib/dalli/protocol/base.rb'
+    - "lib/dalli/pipelined_getter.rb"
+    - "lib/dalli/protocol/base.rb"
 
 # Offense count: 1
 # Configuration parameters: CountComments, CountAsOne.
