@@ -259,6 +259,23 @@ module Dalli
     end
 
     ##
+    # Delete multiple keys efficiently in pipelined mode.
+    # Returns the number of keys that were successfully deleted.
+    def delete_multi(keys)
+      return 0 if keys.empty?
+
+      if ring.servers.length == 1
+        pipelined_deleter.process(keys)
+      else
+        quiet do
+          keys.each do |key|
+            delete_cas(key, 0)
+          end
+        end
+      end
+    end
+
+    ##
     # Append value to the value already stored on the server for 'key'.
     # Appending only works for values stored with :raw => true.
     def append(key, value)
@@ -452,6 +469,10 @@ module Dalli
 
     def pipelined_setter
       PipelinedSetter.new(ring)
+    end
+
+    def pipelined_deleter
+      PipelinedDeleter.new(ring, @key_manager)
     end
   end
 end

@@ -44,6 +44,7 @@ module Dalli
           cmd << cas_string(cas)
           cmd << " T#{ttl}" if ttl
           cmd << ' q' if quiet
+          # cmd << ' k' if quiet # Request key in response for quiet mode
           cmd + TERMINATOR
         end
 

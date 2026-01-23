@@ -104,11 +104,28 @@ module Dalli
 
         results
       end
-      # rubocop:enable Metrics/AbcSize
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
 
+      def delete_multi_req(keys)
+        @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
+          keys.each do |key|
+            encoded_key, base64 = KeyRegularizer.encode(key)
+            req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true)
+            write(req)
+          end
+          write_noop
+          @connection_manager.flush
+
+          # In quiet mode, only NF (not found) responses are sent, HD (success) is suppressed.
+          # Count deleted = total keys - not found count
+          not_found_count = response_processor.count_not_found_responses_until_mn
+          keys.length - not_found_count
+        end
+      end
+
+      # rubocop:enable Metrics/AbcSize
       # Retrieval Commands
       # rubocop:disable Metrics/AbcSize
       # rubocop:disable Metrics/CyclomaticComplexity

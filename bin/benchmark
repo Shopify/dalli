@@ -225,3 +225,12 @@ if %w[all set_multi].include?(bench_target)
     x.compare!
   end
 end
+
+if %w[all delete_multi].include?(bench_target)
+  Benchmark.ips do |x|
+    x.config(warmup: bench_warmup, time: bench_time, suite: suite)
+    x.report('delete_multi 100 keys') { client.delete_multi(pairs.keys) }
+    x.report('delete 100 keys') { pairs.keys.each { |key| client.delete(key) } }
+    x.compare!
+  end
+end
