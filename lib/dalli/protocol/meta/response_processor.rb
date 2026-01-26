@@ -128,6 +128,19 @@ module Dalli
           true
         end
 
+        # In quiet mode, only error responses (NF) are sent, success (HD) is suppressed.
+        # Returns the count of NF (not found) responses.
+        def count_not_found_responses_until_mn
+          not_found_count = 0
+          tokens = next_line_to_tokens
+
+          while tokens.first != MN
+            not_found_count += 1 if tokens.first == NF
+            tokens = next_line_to_tokens
+          end
+          not_found_count
+        end
+
         def tokens_from_header_buffer(buf)
           header = header_from_buffer(buf)
           tokens = header.split
