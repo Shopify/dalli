@@ -440,7 +440,7 @@ module Dalli
     # a particular memcached instance becomes unreachable, or the
     # operational times out.
     ##
-    # rubocop:disable Naming/MethodParameterName
+    # rubocop:disable Naming/MethodParameterName, Style/ArgumentsForwarding
     def perform(op, key, *args)
       # rubocop:enable Naming/MethodParameterName
       return yield if block_given?
@@ -450,6 +450,7 @@ module Dalli
 
       server = ring.server_for_key(key)
       server.request(op, key, *args)
+      # rubocop:enable Style/ArgumentsForwarding
     rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying request with new server' }
