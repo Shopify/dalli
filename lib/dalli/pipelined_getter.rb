@@ -164,7 +164,7 @@ module Dalli
       # individual servers, but I'm not sure.  For now, we keep the
       # mapping between the alerted object (the socket) and the
       # corrresponding server here.
-      server_map = servers.each_with_object({}) { |s, h| h[s.sock] = s }
+      server_map = servers.to_h { |s| [s.sock, s] }
 
       readable, = IO.select(server_map.keys, nil, nil, timeout)
       return [] if readable.nil?
