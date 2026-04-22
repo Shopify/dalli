@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'English'
 require 'forwardable'
 require 'socket'
 require 'timeout'
@@ -59,6 +60,13 @@ module Dalli
           log_unexpected_err(e)
           close
           raise
+        ensure
+          # Catches non-StandardError exceptions (e.g. Async::Stop) that sail
+          # past the rescues above.  $ERROR_INFO is non-nil only when an
+          # exception is unwinding, so pipelined_get's happy path — which
+          # intentionally leaves @request_in_progress = true until the
+          # caller drains the responses — isn't torn down.
+          close if $ERROR_INFO && @connection_manager.request_in_progress?
         end
       end
 
