@@ -13,8 +13,12 @@ module Dalli
     ##
     # Deletes multiple keys from the server.
     # Returns the number of keys that were successfully deleted.
+    #
+    # `req_options` is an optional hash of options applied to every delete
+    # in the pipeline (e.g. :meta_flags). Best-effort; caller is responsible
+    # for ensuring options are appropriate for every key.
     ##
-    def process(keys)
+    def process(keys, req_options = nil)
       return 0 if keys.empty?
 
       # Validate and prepare keys
@@ -23,7 +27,7 @@ module Dalli
       # Single server optimization
       raise 'Multi-server pipelined delete not yet implemented' unless @ring.servers.length == 1
 
-      @ring.servers.first.request(:delete_multi_req, validated_keys)
+      @ring.servers.first.request(:delete_multi_req, validated_keys, req_options)
 
     # Multi-server not yet implemented for pipelined delete
     rescue RetryableNetworkError => e

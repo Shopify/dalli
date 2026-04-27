@@ -21,12 +21,13 @@ module Dalli
           cmd << ' c' if return_cas
           cmd << ' b' if base64
           cmd << " T#{ttl}" if ttl
-          cmd << " #{meta_flags.join(' ')}" if meta_flags
+          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
           cmd << ' k q s' if quiet # Return the key in the response if quiet
           cmd + TERMINATOR
         end
 
-        def self.meta_set(key:, value:, bitflags: nil, cas: nil, ttl: nil, mode: :set, base64: false, quiet: false)
+        def self.meta_set(key:, value:, bitflags: nil, cas: nil, ttl: nil, mode: :set, base64: false, quiet: false,
+                          meta_flags: nil)
           cmd = "ms #{key} #{value.bytesize}"
           cmd << ' c' if !quiet && !%i[append prepend].include?(mode)
           cmd << ' b' if base64
@@ -35,19 +36,22 @@ module Dalli
           cmd << " T#{ttl}" if ttl
           cmd << " M#{mode_to_token(mode)}"
           cmd << ' q' if quiet
+          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
           cmd << TERMINATOR
         end
 
-        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false)
+        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false, meta_flags: nil)
           cmd = "md #{key}"
           cmd << ' b' if base64
           cmd << cas_string(cas)
           cmd << " T#{ttl}" if ttl
           cmd << ' q' if quiet
+          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
           cmd + TERMINATOR
         end
 
-        def self.meta_arithmetic(key:, delta:, initial:, incr: true, cas: nil, ttl: nil, base64: false, quiet: false)
+        def self.meta_arithmetic(key:, delta:, initial:, incr: true, cas: nil, ttl: nil, base64: false, quiet: false,
+                                 meta_flags: nil)
           cmd = "ma #{key} v"
           cmd << ' b' if base64
           cmd << " D#{delta}" if delta
@@ -57,6 +61,7 @@ module Dalli
           cmd << cas_string(cas)
           cmd << ' q' if quiet
           cmd << " M#{incr ? 'I' : 'D'}"
+          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
           cmd + TERMINATOR
         end
         # rubocop:enable Metrics/CyclomaticComplexity
