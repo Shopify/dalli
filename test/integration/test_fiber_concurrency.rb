@@ -57,4 +57,39 @@ describe 'fiber concurrency' do
                       "expected close to run during non-StandardError abort, got close_count=#{close_count}"
     end
   end
+
+  # A second Async::Stop landing on the fiber while it is already inside the
+  # `ensure` cleanup from the first one would interrupt `@sock.close`.
+  # `ConnectionManager#close` rescues only StandardError around the socket
+  # close, so a non-StandardError escaping `@sock.close` leaves `@sock`
+  # non-nil and skips `abort_request!` — the client is returned to the pool
+  # with `@request_in_progress == true` and a half-closed socket.
+  it 'cleans up when @sock.close itself is interrupted by a second non-StandardError' do
+    memcached_persistent do |dc|
+      dc.flush
+      dc.set('a', 'val_a') # warms up the connection so @sock exists
+
+      conn_mgr = dc.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+      sock = conn_mgr.instance_variable_get(:@sock)
+
+      refute_nil sock, 'precondition: socket should be connected after set'
+
+      # Second cancellation: fires when close() reaches @sock.close.
+      sock.define_singleton_method(:close) do
+        raise FiberCancellation, 'simulated second fiber cancellation during @sock.close'
+      end
+
+      # First cancellation: fires when the request parks on a read.
+      conn_mgr.define_singleton_method(:read_line) do
+        raise FiberCancellation, 'simulated first fiber cancellation'
+      end
+
+      assert_raises(FiberCancellation) { dc.get('a') }
+
+      refute_predicate conn_mgr, :request_in_progress?,
+                       'double-exception in ensure left @request_in_progress == true'
+      refute_predicate conn_mgr, :connected?,
+                       'double-exception in ensure left @sock non-nil'
+    end
+  end
 end
