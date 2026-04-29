@@ -320,11 +320,13 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
+    # rubocop:disable Metrics/ParameterLists
     def incr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
       perform(:incr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
+    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Decr subtracts the given amount from the counter on the memcached server.
@@ -342,11 +344,13 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
+    # rubocop:disable Metrics/ParameterLists
     def decr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
       perform(:decr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
+    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Flush the memcached server, at 'delay' seconds in the future.

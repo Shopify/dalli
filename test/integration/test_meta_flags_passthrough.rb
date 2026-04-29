@@ -13,9 +13,9 @@ require_relative '../helper'
 # We use the proxy-reserved 'P' and 'L' flags from the memcached meta protocol,
 # which are explicitly designed to be ignored by memcached itself and consumed
 # by intermediate proxies/routers.
-describe 'meta_flags passthrough' do
-  PROXY_FLAGS = ['Proute=test-region', 'Lhint=local'].freeze
+PROXY_FLAGS = ['Proute=test-region', 'Lhint=local'].freeze
 
+describe 'meta_flags passthrough' do
   describe 'set / add / replace' do
     it 'accepts meta_flags and stores the value' do
       memcached_persistent do |dc|

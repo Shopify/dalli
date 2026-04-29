@@ -48,7 +48,9 @@ module Dalli
             # * socket write each piece indepentantly to avoid extra allocation
             # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
             # * avoids using the request formatter pattern for single inline builder
-            @connection_manager.write("ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{meta_flags_suffix}\r\n")
+            @connection_manager.write(
+              "ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{meta_flags_suffix}\r\n"
+            )
             @connection_manager.write(value)
             @connection_manager.write(TERMINATOR)
           end
