@@ -19,10 +19,10 @@ describe 'fiber concurrency' do
   # and any partial response bytes remain on the wire for a subsequent caller
   # to misread.
   #
-  # `Base#request` gates its `ensure` on `$ERROR_INFO` so that pipelined_get's
-  # intentional request_in_progress=true happy path is not torn down — this
-  # test proves the cleanup fires on abnormal exit for non-StandardError
-  # exceptions.
+  # `Base#request` gates its `ensure` on a local `request_local_completed`
+  # flag so that pipelined_get's intentional request_in_progress=true happy
+  # path is not torn down — this test proves the cleanup fires on abnormal
+  # exit for non-StandardError exceptions.
   #
   # NOTE: this test uses the default `threadsafe: true` config.  The yield-
   # based interleave race (one fiber parking on IO while another enters
@@ -90,6 +90,53 @@ describe 'fiber concurrency' do
                        'double-exception in ensure left @request_in_progress == true'
       refute_predicate conn_mgr, :connected?,
                        'double-exception in ensure left @sock non-nil'
+    end
+  end
+
+  # `$!` (a.k.a. $ERROR_INFO) is preserved when a method is called from
+  # inside a `rescue` clause.  An ensure clause that reads $! to decide
+  # whether "we're unwinding from an exception" sees the *outer* rescued
+  # exception even when its own begin block completed cleanly.
+  #
+  # On the pipelined_get happy path, @request_in_progress is intentionally
+  # left true (the caller still has to drain).  An ensure that closes when
+  # `$ERROR_INFO && request_in_progress?` would therefore tear the socket
+  # out from under a pipelined_get whenever it's called from inside any
+  # rescue clause — a common cache-fallback pattern.  This test pins the
+  # local-flag implementation by exercising that exact call shape.
+  #
+  # NOTE: a block is required here.  Without one, single-server get_multi
+  # takes the `optimized_for_single_server` path which uses :read_multi_req
+  # (calls finish_request!) and would not exercise the pipelined_get
+  # ensure-close window.  Passing a block forces the :pipelined_get opkey.
+  it 'does not tear down a pipelined_get when called from inside a rescue clause' do
+    memcached_persistent do |dc|
+      dc.flush
+      dc.set('a', 'val_a')
+      dc.set('b', 'val_b')
+
+      conn_mgr = dc.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+
+      close_count = 0
+      orig_close = conn_mgr.method(:close)
+      conn_mgr.define_singleton_method(:close) do
+        close_count += 1
+        orig_close.call
+      end
+
+      result = {}
+      begin
+        raise 'outer rescued exception'
+      rescue StandardError
+        # $! is set to the rescued exception while this block executes,
+        # including across the get_multi call.  Block forces :pipelined_get.
+        dc.get_multi(%w[a b]) { |k, v| result[k] = v }
+      end
+
+      assert_equal({ 'a' => 'val_a', 'b' => 'val_b' }, result)
+      assert_equal 0, close_count,
+                   "pipelined_get was torn down mid-flight (close_count=#{close_count}) " \
+                   'when called from inside a rescue clause'
     end
   end
 end
