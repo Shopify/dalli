@@ -162,6 +162,7 @@ describe 'meta_flags passthrough' do
 
         dc.set('a', '1')
         dc.set('b', '2')
+
         assert_equal({ 'a' => '1', 'b' => '2' }, dc.get_multi('a', 'b', meta_flags: []))
 
         assert dc.delete('mfk', meta_flags: [])
