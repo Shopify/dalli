@@ -17,6 +17,12 @@ module Dalli
     # `req_options` is an optional hash of options applied to every delete
     # in the pipeline (e.g. :meta_flags). Best-effort; caller is responsible
     # for ensuring options are appropriate for every key.
+    #
+    # NOTE: this pipelined path only supports single-server deployments.
+    # For multi-server, `Dalli::Client#delete_multi` falls back to a
+    # `quiet { each delete_cas(..., req_options) }` loop, which still
+    # threads `req_options` (and therefore `:meta_flags`) through on a
+    # per-key basis.
     ##
     def process(keys, req_options = nil)
       return 0 if keys.empty?

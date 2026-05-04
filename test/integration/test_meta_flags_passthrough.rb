@@ -144,6 +144,45 @@ describe 'meta_flags passthrough' do
     end
   end
 
+  describe 'empty meta_flags array' do
+    # An empty array must behave identically to omitting the option entirely:
+    # no extra wire bytes, no protocol errors, normal responses. This guards
+    # against accidental regressions of the trailing-space bug that was fixed
+    # alongside this passthrough work.
+    it 'is a no-op for set / delete / incr / decr / get / get_multi' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        assert op_addset_succeeds(dc.set('mfk', 'val', nil, meta_flags: []))
+        assert_equal 'val', dc.get('mfk', meta_flags: [])
+
+        assert_equal 5, dc.incr('cnt', 1, 60, 5, meta_flags: [])
+        assert_equal 6, dc.incr('cnt', 1, 60, 5, meta_flags: [])
+        assert_equal 4, dc.decr('cnt', 2, 60, 5, meta_flags: [])
+
+        dc.set('a', '1')
+        dc.set('b', '2')
+        assert_equal({ 'a' => '1', 'b' => '2' }, dc.get_multi('a', 'b', meta_flags: []))
+
+        assert dc.delete('mfk', meta_flags: [])
+        assert_nil dc.get('mfk')
+      end
+    end
+
+    it 'is a no-op for set_multi and delete_multi' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        dc.set_multi({ 'a' => '1', 'b' => '2' }, 60, meta_flags: [])
+
+        assert_equal({ 'a' => '1', 'b' => '2' }, dc.get_multi('a', 'b'))
+
+        assert_equal 2, dc.delete_multi(%w[a b], meta_flags: [])
+        assert_empty dc.get_multi('a', 'b')
+      end
+    end
+  end
+
   describe 'unknown / invalid flag' do
     # Sanity: prove that memcached actually does the parsing and that an
     # invalid letter is rejected. This locks in the fact that P/L being

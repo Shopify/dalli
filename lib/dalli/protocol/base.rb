@@ -220,7 +220,10 @@ module Dalli
       def meta_flag_options(opts)
         return nil unless opts.is_a?(Hash)
 
-        opts[:meta_flags]
+        flags = opts[:meta_flags]
+        return nil if flags.respond_to?(:empty?) && flags.empty?
+
+        flags
       end
 
       def cache_nils?(opts)

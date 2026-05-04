@@ -101,6 +101,13 @@ module Dalli
     # will be appended to every `mg` line. This is best-effort: the same set
     # of flags is applied to every key, so the caller is responsible for
     # ensuring that's appropriate. Per-key flags are not supported.
+    #
+    # NOTE: `req_options` is supplied as keyword arguments here (e.g.
+    # `dc.get_multi('a', 'b', meta_flags: [...])`) because the variadic
+    # `*keys` parameter precludes a trailing positional options hash. This is
+    # the only method in this client that uses the kwargs form for
+    # `req_options`; the rest (`set`, `delete`, `incr`, etc.) take it as a
+    # trailing positional Hash.
     def get_multi(*keys, **req_options)
       keys.flatten!
       keys.compact!
@@ -128,7 +135,7 @@ module Dalli
     #   { 'key' => [value, cas_id] }
     #
     # See `get_multi` for documentation on the `req_options` trailing keyword
-    # arguments (e.g. `meta_flags:`).
+    # arguments (e.g. `meta_flags:`), including the kwargs-vs-positional caveat.
     def get_multi_cas(*keys, **req_options)
       req_options = nil if req_options.empty?
 
@@ -320,6 +327,11 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
+    # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
+    # Trailing keyword-style usage (`dc.incr('k', 1, 60, 0, meta_flags: [...])`)
+    # works because Ruby auto-boxes the trailing key/value pairs into a Hash;
+    # explicit positional usage (`dc.incr('k', 1, 60, 0, { meta_flags: [...] })`)
+    # also works.
     # rubocop:disable Metrics/ParameterLists
     def incr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
@@ -344,6 +356,8 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
+    # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
+    # See `incr` for an explanation of the calling convention.
     # rubocop:disable Metrics/ParameterLists
     def decr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)

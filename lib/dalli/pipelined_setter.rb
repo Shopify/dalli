@@ -11,6 +11,14 @@ module Dalli
 
     ##
     # Writes multiple keys and values to the server.
+    #
+    # `req_options` is forwarded to the underlying multi-storage request and
+    # applies to every entry in the pipeline (e.g. `:meta_flags`).
+    #
+    # NOTE: this pipelined path only supports single-server deployments.
+    # For multi-server, `Dalli::Client#set_multi` falls back to a
+    # `quiet { each set(..., req_options) }` loop, which still threads
+    # `req_options` (and therefore `:meta_flags`) through on a per-key basis.
     ##
     def process(pairs, ttl, req_options = nil)
       return if pairs.empty?

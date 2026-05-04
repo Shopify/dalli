@@ -178,13 +178,14 @@ module Dalli
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        meta_options = meta_flag_options(options)
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
-                                          meta_flags: meta_flag_options(options))
+                                          meta_flags: meta_options)
           write(req)
           @connection_manager.flush
-          result = if meta_flag_options(options)
+          result = if meta_options
                      response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
                    else
                      response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
