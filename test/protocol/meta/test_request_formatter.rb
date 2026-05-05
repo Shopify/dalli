@@ -291,6 +291,70 @@ describe Dalli::Protocol::Meta::RequestFormatter do
       assert_equal ' Pfoo Lbar',
                    Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 'foo', l_token: 'bar')
     end
+
+    it 'treats empty-string tokens as no-ops' do
+      assert_equal '', Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: '', l_token: '')
+      assert_equal ' Lbar',
+                   Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: '', l_token: 'bar')
+      assert_equal ' Pfoo',
+                   Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 'foo', l_token: '')
+    end
+
+    it 'raises ArgumentError on CR/LF in p_token (wire-protocol injection guard)' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\r\nflush_all\r\n")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\rbar")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\nbar")
+      end
+    end
+
+    it 'raises ArgumentError on CR/LF in l_token' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: "hint\r\nx")
+      end
+    end
+
+    it 'raises ArgumentError on null bytes in either token' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\0bar")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: "foo\0bar")
+      end
+    end
+
+    it 'raises ArgumentError when a non-String value is supplied' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 12_345)
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: :symbol)
+      end
+    end
+
+    it 'is invoked transitively by meta_set / meta_delete / meta_arithmetic / meta_get with bad input' do
+      # Any verb that emits routing tokens must transitively enforce the guard.
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_set(
+          key: 'k', value: 'v', bitflags: 0, p_token: "x\r\ny"
+        )
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: 'k', p_token: "x\r\ny")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_arithmetic(
+          key: 'k', delta: 1, initial: 0, l_token: "x\0y"
+        )
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_get(key: 'k', p_token: "x\r\ny")
+      end
+    end
   end
 
   describe 'meta_noop' do

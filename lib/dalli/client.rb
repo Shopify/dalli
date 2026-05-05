@@ -83,8 +83,11 @@ module Dalli
     ##
     # Get the value and CAS ID associated with the key.  If a block is provided,
     # value and CAS will be passed to the block.
-    def get_cas(key)
-      (value, cas) = perform(:cas, key)
+    #
+    # `req_options` is forwarded to the underlying meta-protocol read so that
+    # transport-level options (e.g. `:p_token` / `:l_token`) are applied.
+    def get_cas(key, req_options = nil)
+      (value, cas) = perform(:cas, key, req_options)
       return [value, cas] unless block_given?
 
       yield value, cas

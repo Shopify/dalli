@@ -226,14 +226,31 @@ module Dalli
         flags
       end
 
+      # Extracts opaque routing-token kwargs (`p_token`, `l_token`) from a
+      # request-options Hash so they can be splatted into a RequestFormatter
+      # call. Empty-string tokens are normalized to `nil` (no-op) so they do
+      # not produce orphan `P`/`L` tokens on the wire (proxies may parse
+      # those inconsistently). CRLF / null-byte injection is rejected later,
+      # at the wire-formatter level, where it can ArgumentError uniformly
+      # regardless of how the token reached the formatter.
       def routing_token_kwargs(opts)
-        return {} unless routing_tokens?(opts)
+        return {} unless opts.is_a?(Hash)
 
-        { p_token: opts[:p_token], l_token: opts[:l_token] }
+        p = blank_token?(opts[:p_token]) ? nil : opts[:p_token]
+        l = blank_token?(opts[:l_token]) ? nil : opts[:l_token]
+        return {} unless p || l
+
+        { p_token: p, l_token: l }
       end
 
       def routing_tokens?(opts)
-        opts.is_a?(Hash) && (opts[:p_token] || opts[:l_token]) ? true : false
+        return false unless opts.is_a?(Hash)
+
+        !blank_token?(opts[:p_token]) || !blank_token?(opts[:l_token])
+      end
+
+      def blank_token?(value)
+        value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end
 
       def cache_nils?(opts)

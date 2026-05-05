@@ -158,6 +158,41 @@ describe 'routing tokens (p_token / l_token) passthrough' do
     end
   end
 
+  describe 'get_cas' do
+    it 'accepts routing tokens and returns [value, cas] (return shape unchanged)' do
+      memcached_persistent do |dc|
+        dc.flush
+        dc.set('rtk', 'val')
+
+        result = dc.get_cas('rtk', ROUTING_OPTS)
+
+        assert_kind_of Array, result
+        assert_equal 2, result.length
+        value, cas = result
+        assert_equal 'val', value
+        assert_kind_of Integer, cas
+        refute_equal 0, cas
+      end
+    end
+
+    it 'yields value and cas to the block when routing tokens are passed' do
+      memcached_persistent do |dc|
+        dc.flush
+        dc.set('rtk', 'val')
+
+        yielded_value = nil
+        yielded_cas = nil
+        dc.get_cas('rtk', ROUTING_OPTS) do |v, c|
+          yielded_value = v
+          yielded_cas = c
+        end
+
+        assert_equal 'val', yielded_value
+        assert_kind_of Integer, yielded_cas
+      end
+    end
+  end
+
   describe 'get_multi' do
     it 'applies routing tokens to every key in the pipeline (single-server fast path)' do
       memcached_persistent do |dc|
@@ -314,6 +349,83 @@ describe 'routing tokens (p_token / l_token) passthrough' do
 
         assert_equal 'cached', result
         refute_kind_of Array, result
+      end
+    end
+  end
+
+  describe 'wire-format hardening' do
+    # `p_token` and `l_token` are appended verbatim to every meta-protocol
+    # request line. Without sanitization, a value like `"foo\r\nflush_all\r\n"`
+    # would be parsed as a second command by memcached or any intermediate
+    # proxy/LB. The previous `meta_flags` API had the same hole; this PR is
+    # the right moment to close it for the routing-token surface.
+    it 'rejects p_token containing CR with ArgumentError' do
+      memcached_persistent do |dc|
+        assert_raises(ArgumentError) do
+          dc.set('safe_key', 'val', nil, p_token: "route=us\rinjected")
+        end
+      end
+    end
+
+    it 'rejects p_token containing LF with ArgumentError' do
+      memcached_persistent do |dc|
+        assert_raises(ArgumentError) do
+          dc.set('safe_key', 'val', nil, p_token: "route=us\nflush_all\n")
+        end
+      end
+    end
+
+    it 'rejects l_token containing CRLF with ArgumentError' do
+      memcached_persistent do |dc|
+        assert_raises(ArgumentError) do
+          dc.get('safe_key', l_token: "hint\r\nflush_all\r\n")
+        end
+      end
+    end
+
+    it 'rejects routing tokens containing null bytes with ArgumentError' do
+      memcached_persistent do |dc|
+        assert_raises(ArgumentError) do
+          dc.delete('safe_key', p_token: "route\0null")
+        end
+      end
+    end
+
+    it 'rejects non-String routing tokens with ArgumentError' do
+      memcached_persistent do |dc|
+        assert_raises(ArgumentError) do
+          dc.set('safe_key', 'val', nil, p_token: 12_345)
+        end
+      end
+    end
+
+    it 'rejection happens before any wire write (state is not corrupted)' do
+      memcached_persistent do |dc|
+        dc.flush
+        dc.set('safe_key', 'original')
+
+        assert_raises(ArgumentError) do
+          dc.set('safe_key', 'should-not-store', nil, p_token: "x\r\ny")
+        end
+
+        # Subsequent operations on the same connection still work; the bad
+        # set was rejected client-side, never reached the server.
+        assert_equal 'original', dc.get('safe_key')
+      end
+    end
+
+    it 'treats empty-string tokens as no-ops (no orphan P/L on the wire)' do
+      memcached_persistent do |dc|
+        dc.flush
+        dc.set('rtk', 'val')
+
+        # An orphan `P` or `L` with no value would either error at the proxy
+        # or be silently misparsed. The client normalizes '' to nil so the
+        # request is byte-identical to one with no routing tokens at all.
+        assert_equal 'val', dc.get('rtk', p_token: '', l_token: '')
+        assert op_addset_succeeds(dc.set('rtk2', 'v', nil, p_token: ''))
+        assert_equal 'v', dc.get('rtk2')
+        assert dc.delete('rtk2', l_token: '')
       end
     end
   end

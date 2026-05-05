@@ -67,13 +67,30 @@ module Dalli
           cmd + TERMINATOR
         end
 
+        # Builds the wire-format suffix for opaque routing tokens (P and L).
+        #
+        # Empty / nil tokens are treated as no-ops. CRLF and null bytes are
+        # rejected with `ArgumentError` to prevent the token from being used
+        # as a wire-protocol injection vector (e.g. `"foo\r\nflush_all\r\n"`
+        # would otherwise be parsed as a second command by memcached or any
+        # intermediate proxy/LB).
         def self.routing_tokens(p_token: nil, l_token: nil)
+          p_token = nil if p_token.respond_to?(:empty?) && p_token.empty?
+          l_token = nil if l_token.respond_to?(:empty?) && l_token.empty?
+          validate_routing_token!('p_token', p_token)
+          validate_routing_token!('l_token', l_token)
           return '' unless p_token || l_token
 
           s = +''
           s << " P#{p_token}" if p_token
           s << " L#{l_token}" if l_token
           s
+        end
+
+        def self.validate_routing_token!(name, value)
+          return if value.nil?
+          raise ArgumentError, "#{name} must be a String, got #{value.class}" unless value.is_a?(String)
+          raise ArgumentError, "#{name} must not contain CRLF or null bytes" if value.match?(/[\r\n\0]/)
         end
         # rubocop:enable Metrics/CyclomaticComplexity
         # rubocop:enable Metrics/ParameterLists
