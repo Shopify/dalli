@@ -10,27 +10,31 @@ module Dalli
       @key_manager = key_manager
     end
 
-    def optimized_for_single_server(keys)
+    def optimized_for_single_server(keys, req_options = nil)
       keys.map! { |a| @key_manager.validate_key(a.to_s) }
-      results = @ring.servers.first.request(:read_multi_req, keys)
+      results = @ring.servers.first.request(:read_multi_req, keys, req_options)
       @key_manager.key_values_without_namespace(results)
     end
 
     ##
     # Yields, one at a time, keys and their values+attributes.
     #
-    def process(keys, &block)
+    # `req_options` is an optional hash of options to apply to every
+    # request in the pipeline (e.g. :meta_flags). It is best-effort and
+    # the caller is responsible for ensuring that the options are
+    # appropriate for every key being fetched.
+    def process(keys, req_options = nil, &block)
       return {} if keys.empty?
 
       # optimized path only works for single server setups at the moment
       if @ring.servers.size > 1 || block
         @ring.lock do
-          servers = setup_requests(keys)
+          servers = setup_requests(keys, req_options)
           start_time = Time.now
           servers = fetch_responses(servers, start_time, @ring.socket_timeout, &block) until servers.empty?
         end
       else
-        optimized_for_single_server(keys)
+        optimized_for_single_server(keys, req_options)
       end
     rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
@@ -38,9 +42,9 @@ module Dalli
       retry
     end
 
-    def setup_requests(keys)
+    def setup_requests(keys, req_options = nil)
       groups = groups_for_keys(keys)
-      make_getkq_requests(groups)
+      make_getkq_requests(groups, req_options)
 
       # TODO: How does this exit on a NetworkError
       finish_queries(groups.keys)
@@ -54,9 +58,9 @@ module Dalli
     # on the wire by switching from getkq to getq, and using
     # the opaque value to match requests to responses.
     ##
-    def make_getkq_requests(groups)
+    def make_getkq_requests(groups, req_options = nil)
       groups.each do |server, keys_for_server|
-        server.request(:pipelined_get, keys_for_server)
+        server.request(:pipelined_get, keys_for_server, req_options)
       rescue DalliError, NetworkError => e
         Dalli.logger.debug { e.inspect }
         Dalli.logger.debug { "unable to get keys for server #{server.name}" }

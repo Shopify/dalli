@@ -220,7 +220,10 @@ module Dalli
       def meta_flag_options(opts)
         return nil unless opts.is_a?(Hash)
 
-        opts[:meta_flags]
+        flags = opts[:meta_flags]
+        return nil if flags.respond_to?(:empty?) && flags.empty?
+
+        flags
       end
 
       def cache_nils?(opts)
@@ -236,10 +239,10 @@ module Dalli
         up!
       end
 
-      def pipelined_get(keys)
+      def pipelined_get(keys, req_options = nil)
         req = +''
         keys.each do |key|
-          req << quiet_get_request(key)
+          req << quiet_get_request(key, req_options)
         end
         # Could send noop here instead of in pipeline_response_setup
         write(req)

@@ -94,19 +94,35 @@ module Dalli
     # Fetch multiple keys efficiently.
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
-    def get_multi(*keys)
+    #
+    # An optional trailing keyword arg hash (`req_options`) is applied to every
+    # request issued in the pipeline. The most useful entry is `:meta_flags`,
+    # an array of meta-protocol flag tokens (e.g. `['Proute=us-east-1']`) that
+    # will be appended to every `mg` line. This is best-effort: the same set
+    # of flags is applied to every key, so the caller is responsible for
+    # ensuring that's appropriate. Per-key flags are not supported.
+    #
+    # NOTE: `req_options` is supplied as keyword arguments here (e.g.
+    # `dc.get_multi('a', 'b', meta_flags: [...])`) because the variadic
+    # `*keys` parameter precludes a trailing positional options hash. This is
+    # the only method in this client that uses the kwargs form for
+    # `req_options`; the rest (`set`, `delete`, `incr`, etc.) take it as a
+    # trailing positional Hash.
+    def get_multi(*keys, **req_options)
       keys.flatten!
       keys.compact!
 
       return {} if keys.empty?
 
+      req_options = nil if req_options.empty?
+
       if block_given?
-        pipelined_getter.process(keys) { |k, data| yield k, data.first }
+        pipelined_getter.process(keys, req_options) { |k, data| yield k, data.first }
       elsif ring.servers.size == 1
-        pipelined_getter.process(keys)
+        pipelined_getter.process(keys, req_options)
       else
         {}.tap do |hash|
-          pipelined_getter.process(keys) { |k, data| hash[k] = data.first }
+          pipelined_getter.process(keys, req_options) { |k, data| hash[k] = data.first }
         end
       end
     end
@@ -117,12 +133,17 @@ module Dalli
     # [value, cas_id]
     # If no block is given, returns a hash of
     #   { 'key' => [value, cas_id] }
-    def get_multi_cas(*keys)
+    #
+    # See `get_multi` for documentation on the `req_options` trailing keyword
+    # arguments (e.g. `meta_flags:`), including the kwargs-vs-positional caveat.
+    def get_multi_cas(*keys, **req_options)
+      req_options = nil if req_options.empty?
+
       if block_given?
-        pipelined_getter.process(keys) { |*args| yield(*args) }
+        pipelined_getter.process(keys, req_options) { |*args| yield(*args) }
       else
         {}.tap do |hash|
-          pipelined_getter.process(keys) { |k, data| hash[k] = data }
+          pipelined_getter.process(keys, req_options) { |k, data| hash[k] = data }
         end
       end
     end
@@ -250,26 +271,30 @@ module Dalli
 
     # Delete a key/value pair, verifying existing CAS.
     # Returns true if succeeded, and falsy otherwise.
-    def delete_cas(key, cas = 0)
-      perform(:delete, key, cas)
+    def delete_cas(key, cas = 0, req_options = nil)
+      perform(:delete, key, cas, req_options)
     end
 
-    def delete(key)
-      delete_cas(key, 0)
+    def delete(key, req_options = nil)
+      delete_cas(key, 0, req_options)
     end
 
     ##
     # Delete multiple keys efficiently in pipelined mode.
     # Returns the number of keys that were successfully deleted.
-    def delete_multi(keys)
+    #
+    # `req_options` is applied to every delete in the pipeline (e.g.
+    # `meta_flags: ['Proute=...']`). Best-effort; the same options apply to
+    # every key.
+    def delete_multi(keys, req_options = nil)
       return 0 if keys.empty?
 
       if ring.servers.length == 1
-        pipelined_deleter.process(keys)
+        pipelined_deleter.process(keys, req_options)
       else
         quiet do
           keys.each do |key|
-            delete_cas(key, 0)
+            delete_cas(key, 0, req_options)
           end
         end
       end
@@ -278,15 +303,15 @@ module Dalli
     ##
     # Append value to the value already stored on the server for 'key'.
     # Appending only works for values stored with :raw => true.
-    def append(key, value)
-      perform(:append, key, value.to_s)
+    def append(key, value, req_options = nil)
+      perform(:append, key, value.to_s, req_options)
     end
 
     ##
     # Prepend value to the value already stored on the server for 'key'.
     # Prepending only works for values stored with :raw => true.
-    def prepend(key, value)
-      perform(:prepend, key, value.to_s)
+    def prepend(key, value, req_options = nil)
+      perform(:prepend, key, value.to_s, req_options)
     end
 
     ##
@@ -302,11 +327,18 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
-    def incr(key, amt = 1, ttl = nil, default = nil)
+    # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
+    # Trailing keyword-style usage (`dc.incr('k', 1, 60, 0, meta_flags: [...])`)
+    # works because Ruby auto-boxes the trailing key/value pairs into a Hash;
+    # explicit positional usage (`dc.incr('k', 1, 60, 0, { meta_flags: [...] })`)
+    # also works.
+    # rubocop:disable Metrics/ParameterLists
+    def incr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
-      perform(:incr, key, amt.to_i, ttl_or_default(ttl), default)
+      perform(:incr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
+    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Decr subtracts the given amount from the counter on the memcached server.
@@ -324,11 +356,15 @@ module Dalli
     # #cas.
     #
     # If the value already exists, it must have been set with raw: true
-    def decr(key, amt = 1, ttl = nil, default = nil)
+    # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
+    # See `incr` for an explanation of the calling convention.
+    # rubocop:disable Metrics/ParameterLists
+    def decr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
-      perform(:decr, key, amt.to_i, ttl_or_default(ttl), default)
+      perform(:decr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
+    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Flush the memcached server, at 'delay' seconds in the future.

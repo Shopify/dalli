@@ -27,6 +27,7 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       def write_multi_storage_req(pairs, ttl = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
+        meta_flags_suffix = build_meta_flags_suffix(meta_flag_options(options))
 
         @middlewares_stack.storage_req_pipeline('memcached.write_multi', {
                                                   'keys' => pairs.keys,
@@ -47,7 +48,9 @@ module Dalli
             # * socket write each piece indepentantly to avoid extra allocation
             # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
             # * avoids using the request formatter pattern for single inline builder
-            @connection_manager.write("ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q\r\n")
+            @connection_manager.write(
+              "ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{meta_flags_suffix}\r\n"
+            )
             @connection_manager.write(value)
             @connection_manager.write(TERMINATOR)
           end
@@ -63,7 +66,7 @@ module Dalli
       # rubocop:disable Metrics/CyclomaticComplexity
       # rubocop:disable Metrics/PerceivedComplexity
       # rubocop:disable Metrics/MethodLength
-      def read_multi_req(keys)
+      def read_multi_req(keys, req_options = nil)
         # Pre-allocate the results hash with expected size
         results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
         optimized_for_raw = @value_marshaller.raw_by_default
@@ -71,7 +74,8 @@ module Dalli
 
         total_value_bytesize = 0
         @middlewares_stack.retrieve_req_pipeline('memcached.read_multi', { 'keys' => keys }) do |attributes|
-          post_get_req = optimized_for_raw ? "v k q\r\n" : "v f k q\r\n"
+          meta_flags_suffix = build_meta_flags_suffix(meta_flag_options(req_options))
+          post_get_req = optimized_for_raw ? "v k q#{meta_flags_suffix}\r\n" : "v f k q#{meta_flags_suffix}\r\n"
           keys.each do |key|
             @connection_manager.write("mg #{key} #{post_get_req}")
           end
@@ -108,11 +112,13 @@ module Dalli
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
 
-      def delete_multi_req(keys)
+      def delete_multi_req(keys, req_options = nil)
+        meta_flags = meta_flag_options(req_options)
         @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
           keys.each do |key|
             encoded_key, base64 = KeyRegularizer.encode(key)
-            req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true)
+            req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true,
+                                               meta_flags: meta_flags)
             write(req)
           end
           write_noop
@@ -161,23 +167,25 @@ module Dalli
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
 
-      def quiet_get_request(key)
+      def quiet_get_request(key, req_options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'quiet' => true }) do
-          RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true)
+          RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true,
+                                    meta_flags: meta_flag_options(req_options))
         end
       end
 
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        meta_options = meta_flag_options(options)
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
-                                          meta_flags: meta_flag_options(options))
+                                          meta_flags: meta_options)
           write(req)
           @connection_manager.flush
-          result = if meta_flag_options(options)
+          result = if meta_options
                      response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
                    else
                      response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
@@ -247,7 +255,8 @@ module Dalli
             ttl: ttl,
             mode: mode,
             quiet: quiet?,
-            base64: base64
+            base64: base64,
+            meta_flags: meta_flag_options(options)
           )
           write(req)
           write(value)
@@ -259,26 +268,27 @@ module Dalli
       end
       # rubocop:enable Metrics/ParameterLists
 
-      def append(key, value)
+      def append(key, value, options = nil)
         @middlewares_stack.storage_req('memcached.append', { 'keys' => key, 'value_size' => value.bytesize }) do
-          write_append_prepend_req(:append, key, value)
+          write_append_prepend_req(:append, key, value, nil, nil, options || {})
           response_processor.meta_set_append_prepend unless quiet?
         end
       end
 
-      def prepend(key, value)
+      def prepend(key, value, options = nil)
         @middlewares_stack.storage_req('memcached.prepend', { 'keys' => key, 'value_size' => value.bytesize }) do
-          write_append_prepend_req(:prepend, key, value)
+          write_append_prepend_req(:prepend, key, value, nil, nil, options || {})
           response_processor.meta_set_append_prepend unless quiet?
         end
       end
 
       # rubocop:disable Metrics/ParameterLists
-      def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, _options = {})
+      def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
         req = RequestFormatter.meta_set(key: encoded_key, value: value, base64: base64,
-                                        cas: cas, ttl: ttl, mode: mode, quiet: quiet?)
+                                        cas: cas, ttl: ttl, mode: mode, quiet: quiet?,
+                                        meta_flags: meta_flag_options(options))
         write(req)
         write(value)
         write(TERMINATOR)
@@ -287,11 +297,12 @@ module Dalli
       # rubocop:enable Metrics/ParameterLists
 
       # Delete Commands
-      def delete(key, cas)
+      def delete(key, cas, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         @middlewares_stack.storage_req('memcached.delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
-                                             base64: base64, quiet: quiet?)
+                                             base64: base64, quiet: quiet?,
+                                             meta_flags: meta_flag_options(options))
           write(req)
           @connection_manager.flush
           response_processor.meta_delete unless quiet?
@@ -299,15 +310,16 @@ module Dalli
       end
 
       # Arithmetic Commands
-      def decr(key, count, ttl, initial)
-        decr_incr false, key, count, ttl, initial
+      def decr(key, count, ttl, initial, options = nil)
+        decr_incr false, key, count, ttl, initial, options
       end
 
-      def incr(key, count, ttl, initial)
-        decr_incr true, key, count, ttl, initial
+      def incr(key, count, ttl, initial, options = nil)
+        decr_incr true, key, count, ttl, initial, options
       end
 
-      def decr_incr(incr, key, delta, ttl, initial)
+      # rubocop:disable Metrics/ParameterLists
+      def decr_incr(incr, key, delta, ttl, initial, options = nil)
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
 
@@ -321,10 +333,18 @@ module Dalli
           }
         ) do
           write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
-                                                 quiet: quiet?, base64: base64))
+                                                 quiet: quiet?, base64: base64,
+                                                 meta_flags: meta_flag_options(options)))
           @connection_manager.flush
           response_processor.decr_incr unless quiet?
         end
+      end
+      # rubocop:enable Metrics/ParameterLists
+
+      def build_meta_flags_suffix(meta_flags)
+        return '' unless meta_flags && !meta_flags.empty?
+
+        " #{meta_flags.join(' ')}"
       end
 
       # Other Commands
