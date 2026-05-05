@@ -32,15 +32,44 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     end
 
     it 'appends meta_flags after the standard flags' do
-      assert_equal "mg #{key} v f Proute=us-east-1 Lpath=/x\r\n",
+      assert_equal "mg #{key} v f Xfoo Ybar\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, meta_flags: ['Proute=us-east-1', 'Lpath=/x']
+                     key: key, meta_flags: %w[Xfoo Ybar]
                    )
     end
 
     it 'ignores empty meta_flags arrays' do
       assert_equal "mg #{key} v f\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, meta_flags: [])
+    end
+
+    it 'appends p_token and l_token at the end of the command' do
+      assert_equal "mg #{key} v f Proute=a Lhint=b\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
+                     key: key, p_token: 'route=a', l_token: 'hint=b'
+                   )
+    end
+
+    it 'appends p_token without l_token' do
+      assert_equal "mg #{key} v f Pjust-p\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: 'just-p')
+    end
+
+    it 'appends l_token without p_token' do
+      assert_equal "mg #{key} v f Ljust-l\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, l_token: 'just-l')
+    end
+
+    it 'preserves the meta_flags + routing-token ordering (meta_flags first, then P/L)' do
+      assert_equal "mg #{key} v f Xfoo Proute=a Lhint=b\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
+                     key: key, meta_flags: %w[Xfoo], p_token: 'route=a', l_token: 'hint=b'
+                   )
+    end
+
+    it 'omits routing tokens when both p_token and l_token are nil' do
+      assert_equal "mg #{key} v f\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: nil, l_token: nil)
     end
   end
 
@@ -112,11 +141,18 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                                                                     base64: true)
     end
 
-    it 'appends meta_flags at the end of the command' do
-      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS Proute=a Lpath=/x\r\n",
+    it 'appends p_token and l_token at the end of the command' do
+      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS Proute=a Lhint=b\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_set(
                      key: key, value: val, bitflags: bitflags,
-                     meta_flags: ['Proute=a', 'Lpath=/x']
+                     p_token: 'route=a', l_token: 'hint=b'
+                   )
+    end
+
+    it 'omits routing tokens when both are nil' do
+      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_set(
+                     key: key, value: val, bitflags: bitflags, p_token: nil, l_token: nil
                    )
     end
   end
@@ -156,10 +192,10 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                    Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: key, base64: true)
     end
 
-    it 'appends meta_flags at the end of the command' do
-      assert_equal "md #{key} Proute=a Lpath=/x\r\n",
+    it 'appends p_token and l_token at the end of the command' do
+      assert_equal "md #{key} Proute=a Lhint=b\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_delete(
-                     key: key, meta_flags: ['Proute=a', 'Lpath=/x']
+                     key: key, p_token: 'route=a', l_token: 'hint=b'
                    )
     end
   end
@@ -228,12 +264,96 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                                                                            base64: true)
     end
 
-    it 'appends meta_flags at the end of the command' do
-      assert_equal "ma #{key} v D#{delta} J#{initial} N0 MI Proute=a Lpath=/x\r\n",
+    it 'appends p_token and l_token at the end of the command' do
+      assert_equal "ma #{key} v D#{delta} J#{initial} N0 MI Proute=a Lhint=b\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_arithmetic(
                      key: key, delta: delta, initial: initial,
-                     meta_flags: ['Proute=a', 'Lpath=/x']
+                     p_token: 'route=a', l_token: 'hint=b'
                    )
+    end
+  end
+
+  describe 'routing_tokens' do
+    it 'returns an empty string when both tokens are nil' do
+      assert_equal '', Dalli::Protocol::Meta::RequestFormatter.routing_tokens
+      assert_equal '', Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: nil, l_token: nil)
+    end
+
+    it 'emits only P when l_token is nil' do
+      assert_equal ' Pfoo', Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 'foo')
+    end
+
+    it 'emits only L when p_token is nil' do
+      assert_equal ' Lbar', Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: 'bar')
+    end
+
+    it 'emits P then L when both are set' do
+      assert_equal ' Pfoo Lbar',
+                   Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 'foo', l_token: 'bar')
+    end
+
+    it 'treats empty-string tokens as no-ops' do
+      assert_equal '', Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: '', l_token: '')
+      assert_equal ' Lbar',
+                   Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: '', l_token: 'bar')
+      assert_equal ' Pfoo',
+                   Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 'foo', l_token: '')
+    end
+
+    it 'raises ArgumentError on CR/LF in p_token (wire-protocol injection guard)' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\r\nflush_all\r\n")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\rbar")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\nbar")
+      end
+    end
+
+    it 'raises ArgumentError on CR/LF in l_token' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: "hint\r\nx")
+      end
+    end
+
+    it 'raises ArgumentError on null bytes in either token' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: "foo\0bar")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: "foo\0bar")
+      end
+    end
+
+    it 'raises ArgumentError when a non-String value is supplied' do
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(p_token: 12_345)
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.routing_tokens(l_token: :symbol)
+      end
+    end
+
+    it 'is invoked transitively by meta_set / meta_delete / meta_arithmetic / meta_get with bad input' do
+      # Any verb that emits routing tokens must transitively enforce the guard.
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_set(
+          key: 'k', value: 'v', bitflags: 0, p_token: "x\r\ny"
+        )
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: 'k', p_token: "x\r\ny")
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_arithmetic(
+          key: 'k', delta: 1, initial: 0, l_token: "x\0y"
+        )
+      end
+      assert_raises(ArgumentError) do
+        Dalli::Protocol::Meta::RequestFormatter.meta_get(key: 'k', p_token: "x\r\ny")
+      end
     end
   end
 

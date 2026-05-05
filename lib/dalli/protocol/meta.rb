@@ -27,7 +27,7 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       def write_multi_storage_req(pairs, ttl = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
-        meta_flags_suffix = build_meta_flags_suffix(meta_flag_options(options))
+        routing_suffix = RequestFormatter.routing_tokens(**routing_token_kwargs(options))
 
         @middlewares_stack.storage_req_pipeline('memcached.write_multi', {
                                                   'keys' => pairs.keys,
@@ -49,7 +49,7 @@ module Dalli
             # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
             # * avoids using the request formatter pattern for single inline builder
             @connection_manager.write(
-              "ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{meta_flags_suffix}\r\n"
+              "ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{routing_suffix}\r\n"
             )
             @connection_manager.write(value)
             @connection_manager.write(TERMINATOR)
@@ -74,8 +74,8 @@ module Dalli
 
         total_value_bytesize = 0
         @middlewares_stack.retrieve_req_pipeline('memcached.read_multi', { 'keys' => keys }) do |attributes|
-          meta_flags_suffix = build_meta_flags_suffix(meta_flag_options(req_options))
-          post_get_req = optimized_for_raw ? "v k q#{meta_flags_suffix}\r\n" : "v f k q#{meta_flags_suffix}\r\n"
+          routing_suffix = RequestFormatter.routing_tokens(**routing_token_kwargs(req_options))
+          post_get_req = optimized_for_raw ? "v k q#{routing_suffix}\r\n" : "v f k q#{routing_suffix}\r\n"
           keys.each do |key|
             @connection_manager.write("mg #{key} #{post_get_req}")
           end
@@ -113,12 +113,12 @@ module Dalli
       # rubocop:enable Metrics/MethodLength
 
       def delete_multi_req(keys, req_options = nil)
-        meta_flags = meta_flag_options(req_options)
+        routing_kwargs = routing_token_kwargs(req_options)
         @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
           keys.each do |key|
             encoded_key, base64 = KeyRegularizer.encode(key)
             req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true,
-                                               meta_flags: meta_flags)
+                                               **routing_kwargs)
             write(req)
           end
           write_noop
@@ -136,18 +136,22 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       # rubocop:disable Metrics/CyclomaticComplexity
       # rubocop:disable Metrics/PerceivedComplexity
+      # rubocop:disable Metrics/MethodLength
       def get(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
+        routing_kwargs = routing_token_kwargs(options)
+        fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
-          if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
+          if fast_path
             write("mg #{encoded_key} v\r\n")
           else
-            write(RequestFormatter.meta_get(key: encoded_key, base64: base64, meta_flags: meta_options))
+            write(RequestFormatter.meta_get(key: encoded_key, base64: base64,
+                                            meta_flags: meta_options, **routing_kwargs))
           end
           @connection_manager.flush
-          result = if !meta_options && !base64 && !quiet? && @value_marshaller.raw_by_default
+          result = if fast_path
                      response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
                    elsif meta_options
                      response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
@@ -166,23 +170,27 @@ module Dalli
       # rubocop:enable Metrics/AbcSize
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
+      # rubocop:enable Metrics/MethodLength
 
       def quiet_get_request(key, req_options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        routing_kwargs = routing_token_kwargs(req_options)
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'quiet' => true }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true,
-                                    meta_flags: meta_flag_options(req_options))
+                                    **routing_kwargs)
         end
       end
 
+      # rubocop:disable Metrics/AbcSize
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
+        routing_kwargs = routing_token_kwargs(options)
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
-                                          meta_flags: meta_options)
+                                          meta_flags: meta_options, **routing_kwargs)
           write(req)
           @connection_manager.flush
           result = if meta_options
@@ -199,6 +207,7 @@ module Dalli
           result
         end
       end
+      # rubocop:enable Metrics/AbcSize
 
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
@@ -214,11 +223,13 @@ module Dalli
 
       # TODO: This is confusing, as there's a cas command in memcached
       # and this isn't it.  Maybe rename?  Maybe eliminate?
-      def cas(key)
+      def cas(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        routing_kwargs = routing_token_kwargs(options)
 
         @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
-          req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64)
+          req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64,
+                                          **routing_kwargs)
           write(req)
           @connection_manager.flush
           response_processor.meta_get_with_value_and_cas
@@ -256,7 +267,7 @@ module Dalli
             mode: mode,
             quiet: quiet?,
             base64: base64,
-            meta_flags: meta_flag_options(options)
+            **routing_token_kwargs(options)
           )
           write(req)
           write(value)
@@ -288,7 +299,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         req = RequestFormatter.meta_set(key: encoded_key, value: value, base64: base64,
                                         cas: cas, ttl: ttl, mode: mode, quiet: quiet?,
-                                        meta_flags: meta_flag_options(options))
+                                        **routing_token_kwargs(options))
         write(req)
         write(value)
         write(TERMINATOR)
@@ -302,7 +313,7 @@ module Dalli
         @middlewares_stack.storage_req('memcached.delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                              base64: base64, quiet: quiet?,
-                                             meta_flags: meta_flag_options(options))
+                                             **routing_token_kwargs(options))
           write(req)
           @connection_manager.flush
           response_processor.meta_delete unless quiet?
@@ -334,18 +345,12 @@ module Dalli
         ) do
           write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
                                                  quiet: quiet?, base64: base64,
-                                                 meta_flags: meta_flag_options(options)))
+                                                 **routing_token_kwargs(options)))
           @connection_manager.flush
           response_processor.decr_incr unless quiet?
         end
       end
       # rubocop:enable Metrics/ParameterLists
-
-      def build_meta_flags_suffix(meta_flags)
-        return '' unless meta_flags && !meta_flags.empty?
-
-        " #{meta_flags.join(' ')}"
-      end
 
       # Other Commands
       def flush(delay = 0)
