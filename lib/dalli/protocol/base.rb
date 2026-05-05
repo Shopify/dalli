@@ -226,6 +226,16 @@ module Dalli
         flags
       end
 
+      def routing_token_kwargs(opts)
+        return {} unless routing_tokens?(opts)
+
+        { p_token: opts[:p_token], l_token: opts[:l_token] }
+      end
+
+      def routing_tokens?(opts)
+        opts.is_a?(Hash) && (opts[:p_token] || opts[:l_token]) ? true : false
+      end
+
       def cache_nils?(opts)
         return false unless opts.is_a?(Hash)
 

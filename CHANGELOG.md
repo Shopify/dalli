@@ -7,6 +7,18 @@ Unreleased
 - Fix cannot read response data included terminator `\r\n` when use meta protocol (matsubara0507)
 - Remove binary protocol support (grcooper)
 - Add support for `raw` client option (nherson)
+- Add `meta_flags:` request option to all storage, delete, arithmetic, and pipelined operations
+  (set, add, replace, append, prepend, delete, incr, decr, set_multi, delete_multi, get_multi,
+  get_multi_cas) for passing meta-protocol flags (typically the proxy-reserved `P` and `L` flags)
+  through to the wire. Previously only `get` and `gat` accepted `meta_flags:`. (nherson)
+  - Minor backwards-compat note: `Client#get_multi(*keys)` now also accepts trailing keyword
+    arguments (`**req_options`). Callers that previously passed an inline trailing hash literal
+    (e.g. `dc.get_multi('a', foo: 1)`) would have seen the hash flattened into `keys` and likely
+    raised on key validation; that hash is now silently absorbed into `req_options` instead. No
+    documented callers exist for this pattern.
+  - Empty `meta_flags: []` arrays are now treated as a no-op everywhere, including on `get`/`gat`
+    where they previously emitted a stray trailing space on the wire. The wire form was still
+    accepted by memcached, but the new behavior is more predictable.
 
 3.2.8
 ==========

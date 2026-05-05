@@ -15,19 +15,21 @@ module Dalli
         # rubocop:disable Metrics/CyclomaticComplexity
         # rubocop:disable Metrics/ParameterLists
         # rubocop:disable Metrics/PerceivedComplexity
-        def self.meta_get(key:, value: true, return_cas: false, ttl: nil, base64: false, quiet: false, meta_flags: nil)
+        def self.meta_get(key:, value: true, return_cas: false, ttl: nil, base64: false, quiet: false,
+                          meta_flags: nil, p_token: nil, l_token: nil)
           cmd = "mg #{key}"
           cmd << ' v f' if value
           cmd << ' c' if return_cas
           cmd << ' b' if base64
           cmd << " T#{ttl}" if ttl
           cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
+          cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd << ' k q s' if quiet # Return the key in the response if quiet
           cmd + TERMINATOR
         end
 
         def self.meta_set(key:, value:, bitflags: nil, cas: nil, ttl: nil, mode: :set, base64: false, quiet: false,
-                          meta_flags: nil)
+                          p_token: nil, l_token: nil)
           cmd = "ms #{key} #{value.bytesize}"
           cmd << ' c' if !quiet && !%i[append prepend].include?(mode)
           cmd << ' b' if base64
@@ -36,22 +38,22 @@ module Dalli
           cmd << " T#{ttl}" if ttl
           cmd << " M#{mode_to_token(mode)}"
           cmd << ' q' if quiet
-          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
+          cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd << TERMINATOR
         end
 
-        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false, meta_flags: nil)
+        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false, p_token: nil, l_token: nil)
           cmd = "md #{key}"
           cmd << ' b' if base64
           cmd << cas_string(cas)
           cmd << " T#{ttl}" if ttl
           cmd << ' q' if quiet
-          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
+          cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd + TERMINATOR
         end
 
         def self.meta_arithmetic(key:, delta:, initial:, incr: true, cas: nil, ttl: nil, base64: false, quiet: false,
-                                 meta_flags: nil)
+                                 p_token: nil, l_token: nil)
           cmd = "ma #{key} v"
           cmd << ' b' if base64
           cmd << " D#{delta}" if delta
@@ -61,8 +63,17 @@ module Dalli
           cmd << cas_string(cas)
           cmd << ' q' if quiet
           cmd << " M#{incr ? 'I' : 'D'}"
-          cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
+          cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd + TERMINATOR
+        end
+
+        def self.routing_tokens(p_token: nil, l_token: nil)
+          return '' unless p_token || l_token
+
+          s = +''
+          s << " P#{p_token}" if p_token
+          s << " L#{l_token}" if l_token
+          s
         end
         # rubocop:enable Metrics/CyclomaticComplexity
         # rubocop:enable Metrics/ParameterLists

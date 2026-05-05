@@ -96,14 +96,13 @@ module Dalli
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
     #
     # An optional trailing keyword arg hash (`req_options`) is applied to every
-    # request issued in the pipeline. The most useful entry is `:meta_flags`,
-    # an array of meta-protocol flag tokens (e.g. `['Proute=us-east-1']`) that
-    # will be appended to every `mg` line. This is best-effort: the same set
-    # of flags is applied to every key, so the caller is responsible for
-    # ensuring that's appropriate. Per-key flags are not supported.
+    # request issued in the pipeline. Recognized entries include the opaque
+    # routing tokens `:p_token` and `:l_token`, which are appended to every
+    # `mg` line as `P<token>` / `L<token>`. The same value is applied to every
+    # key in the pipeline; per-key tokens are not supported.
     #
     # NOTE: `req_options` is supplied as keyword arguments here (e.g.
-    # `dc.get_multi('a', 'b', meta_flags: [...])`) because the variadic
+    # `dc.get_multi('a', 'b', p_token: 'foo')`) because the variadic
     # `*keys` parameter precludes a trailing positional options hash. This is
     # the only method in this client that uses the kwargs form for
     # `req_options`; the rest (`set`, `delete`, `incr`, etc.) take it as a
@@ -135,7 +134,7 @@ module Dalli
     #   { 'key' => [value, cas_id] }
     #
     # See `get_multi` for documentation on the `req_options` trailing keyword
-    # arguments (e.g. `meta_flags:`), including the kwargs-vs-positional caveat.
+    # arguments (e.g. `p_token:` / `l_token:`), including the kwargs-vs-positional caveat.
     def get_multi_cas(*keys, **req_options)
       req_options = nil if req_options.empty?
 
@@ -328,9 +327,9 @@ module Dalli
     #
     # If the value already exists, it must have been set with raw: true
     # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
-    # Trailing keyword-style usage (`dc.incr('k', 1, 60, 0, meta_flags: [...])`)
+    # Trailing keyword-style usage (`dc.incr('k', 1, 60, 0, p_token: 'foo')`)
     # works because Ruby auto-boxes the trailing key/value pairs into a Hash;
-    # explicit positional usage (`dc.incr('k', 1, 60, 0, { meta_flags: [...] })`)
+    # explicit positional usage (`dc.incr('k', 1, 60, 0, { p_token: 'foo' })`)
     # also works.
     # rubocop:disable Metrics/ParameterLists
     def incr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
@@ -445,7 +444,7 @@ module Dalli
     end
 
     def cas_core(key, always_set, ttl = nil, req_options = nil)
-      (value, cas) = perform(:cas, key)
+      (value, cas) = perform(:cas, key, req_options)
       return if value.nil? && !always_set
 
       newvalue = yield(value)
