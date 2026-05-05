@@ -26,6 +26,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.flush
 
         result = dc.set('rtk', 'val1', nil, ROUTING_OPTS)
+
         assert op_addset_succeeds(result)
         # set returns a CAS integer (or true) — never an Array
         refute_kind_of Array, result
@@ -53,6 +54,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.set('rtk', 'val')
 
         result = dc.get('rtk', ROUTING_OPTS)
+
         refute_kind_of Array, result
         assert_equal 'val', result
 
@@ -79,6 +81,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.set('rtk', 'val')
 
         result = dc.gat('rtk', 60, ROUTING_OPTS)
+
         refute_kind_of Array, result
         assert_equal 'val', result
       end
@@ -103,6 +106,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.flush
 
         v = dc.incr('counter', 1, 60, 5, ROUTING_OPTS)
+
         assert_kind_of Integer, v
         assert_equal 5, v
 
@@ -148,6 +152,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.flush
         # cas! yields even when the key is missing
         dc.cas!('rtk', 60, ROUTING_OPTS) { |_v| 'created' }
+
         assert_equal 'created', dc.get('rtk')
       end
     end
@@ -262,6 +267,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
           block_invocations += 1
           'should not run'
         end
+
         assert_equal 1, block_invocations, 'fetch block must not be invoked on a hit'
         assert_equal 'computed', result2
       end
@@ -270,6 +276,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
     it 'returns nil on a miss with no block, even when routing tokens are passed' do
       memcached_persistent do |dc|
         dc.flush
+
         assert_nil dc.fetch('absent', 60, ROUTING_OPTS)
       end
     end
@@ -304,6 +311,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.set('rtk', 'cached')
 
         result = dc.fetch('rtk', 60, ROUTING_OPTS) { 'computed' }
+
         assert_equal 'cached', result
         refute_kind_of Array, result
       end
@@ -329,6 +337,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
 
         assert_kind_of Array, result, 'meta_flags must still produce a tuple from get'
         value, flags = result
+
         assert_equal 'val', value
         assert_kind_of Hash, flags
       end
@@ -340,8 +349,10 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         dc.set('rtk', 'val')
 
         result = dc.get('rtk', meta_flags: ['s'], **ROUTING_OPTS)
+
         assert_kind_of Array, result
         value, _flags = result
+
         assert_equal 'val', value
       end
     end
@@ -358,6 +369,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         assert dc.delete('rtk', meta_flags: ['s'])
 
         v = dc.incr('cnt', 1, 60, 5, meta_flags: ['s'])
+
         assert_kind_of Integer, v
       end
     end

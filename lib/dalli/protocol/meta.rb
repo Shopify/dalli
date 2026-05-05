@@ -136,6 +136,7 @@ module Dalli
       # rubocop:disable Metrics/AbcSize
       # rubocop:disable Metrics/CyclomaticComplexity
       # rubocop:disable Metrics/PerceivedComplexity
+      # rubocop:disable Metrics/MethodLength
       def get(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
@@ -169,6 +170,7 @@ module Dalli
       # rubocop:enable Metrics/AbcSize
       # rubocop:enable Metrics/CyclomaticComplexity
       # rubocop:enable Metrics/PerceivedComplexity
+      # rubocop:enable Metrics/MethodLength
 
       def quiet_get_request(key, req_options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -179,6 +181,7 @@ module Dalli
         end
       end
 
+      # rubocop:disable Metrics/AbcSize
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -204,6 +207,7 @@ module Dalli
           result
         end
       end
+      # rubocop:enable Metrics/AbcSize
 
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
