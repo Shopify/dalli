@@ -96,7 +96,7 @@ module Dalli
         # in microbenchmarks for short clean tokens (the hot path). Ruby's
         # Regexp engine fuses short character classes into a single C-level
         # scan, while the include? chain walks the string up to three times.
-        ROUTING_TOKEN_FORBIDDEN = /[\r\n\0]/.freeze
+        ROUTING_TOKEN_FORBIDDEN = /[\r\n\0]/
         private_constant :ROUTING_TOKEN_FORBIDDEN
 
         def self.validate_routing_token!(name, value)

@@ -169,6 +169,7 @@ describe 'routing tokens (p_token / l_token) passthrough' do
         assert_kind_of Array, result
         assert_equal 2, result.length
         value, cas = result
+
         assert_equal 'val', value
         assert_kind_of Integer, cas
         refute_equal 0, cas
