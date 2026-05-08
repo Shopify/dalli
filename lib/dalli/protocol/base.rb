@@ -249,6 +249,23 @@ module Dalli
         !blank_token?(opts[:p_token]) || !blank_token?(opts[:l_token])
       end
 
+      # Extracts tombstone-related kwargs (`invalidate`, `tombstone_ttl`,
+      # `drop_value`) from a request-options Hash so they can be splatted
+      # into a RequestFormatter.meta_delete call. Returns `{}` when none
+      # of the keys are set, so the splat is a no-op for the common path.
+      # Validation (e.g. `tombstone_ttl` requiring `invalidate`) happens at
+      # the wire-formatter level, where it can ArgumentError uniformly.
+      def tombstone_kwargs(opts)
+        return {} unless opts.is_a?(Hash)
+
+        invalidate    = opts[:invalidate]
+        tombstone_ttl = opts[:tombstone_ttl]
+        drop_value    = opts[:drop_value]
+        return {} unless invalidate || tombstone_ttl || drop_value
+
+        { invalidate: invalidate, tombstone_ttl: tombstone_ttl, drop_value: drop_value }.compact
+      end
+
       def blank_token?(value)
         value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end

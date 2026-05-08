@@ -67,6 +67,24 @@ module Dalli
           tokens.first == EN ? nil : true
         end
 
+        # Stale-aware get that returns a Dalli::CacheResult so callers can
+        # distinguish a tombstoned item (stale?) from a true miss (miss?).
+        # The value field may be empty when the tombstone was created with
+        # drop_value, which is intentional — callers branch on the
+        # predicates rather than nil-ness.
+        def meta_get_with_status
+          tokens = error_on_unexpected!([VA, EN, HD])
+          return ::Dalli::CacheResult.new(value: nil, miss: true) if tokens.first == EN
+
+          stale = stale_from_tokens(tokens)
+          if tokens.first == VA
+            value = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
+            ::Dalli::CacheResult.new(value: value, stale: stale)
+          else
+            ::Dalli::CacheResult.new(value: nil, stale: stale)
+          end
+        end
+
         def meta_set_with_cas
           tokens = error_on_unexpected!([HD, NS, NF, EX])
           return false unless tokens.first == HD
@@ -216,6 +234,14 @@ module Dalli
 
         def bitflags_from_tokens(tokens)
           value_from_tokens(tokens, 'f')&.to_i
+        end
+
+        # Detects the `X` presence flag indicating the item has been marked
+        # stale via a prior `md key I`. Strict equality (rather than
+        # start_with?) avoids false positives if a future value-bearing
+        # flag is introduced beginning with `X`.
+        def stale_from_tokens(tokens)
+          tokens.any? { |t| t == 'X' }
         end
 
         def cas_from_tokens(tokens)
