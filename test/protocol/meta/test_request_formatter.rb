@@ -198,6 +198,73 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                      key: key, p_token: 'route=a', l_token: 'hint=b'
                    )
     end
+
+    describe 'tombstone flags' do
+      it 'emits the I flag when invalidate is true' do
+        assert_equal "md #{key} I\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: key, invalidate: true)
+      end
+
+      it 'emits I T<n> when invalidate and tombstone_ttl are set' do
+        assert_equal "md #{key} I T30\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, invalidate: true, tombstone_ttl: 30
+                     )
+      end
+
+      it 'emits I T<n> x when invalidate, tombstone_ttl, and drop_value are all set' do
+        assert_equal "md #{key} I T30 x\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, invalidate: true, tombstone_ttl: 30, drop_value: true
+                     )
+      end
+
+      it 'emits I x without tombstone_ttl when invalidate and drop_value are set' do
+        assert_equal "md #{key} I x\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, invalidate: true, drop_value: true
+                     )
+      end
+
+      it 'allows drop_value alone (no invalidate) — only T-without-I is restricted' do
+        assert_equal "md #{key} x\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: key, drop_value: true)
+      end
+
+      it 'raises ArgumentError when tombstone_ttl is supplied without invalidate' do
+        assert_raises(ArgumentError) do
+          Dalli::Protocol::Meta::RequestFormatter.meta_delete(key: key, tombstone_ttl: 30)
+        end
+      end
+
+      it 'coerces a string tombstone_ttl into an integer (rejects non-numeric)' do
+        assert_equal "md #{key} I T30\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, invalidate: true, tombstone_ttl: '30'
+                     )
+
+        assert_raises(ArgumentError) do
+          Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+            key: key, invalidate: true, tombstone_ttl: "\nset importantkey 1 1000 8\ninjected"
+          )
+        end
+      end
+
+      it 'orders tombstone flags after q (quiet) and before routing tokens' do
+        assert_equal "md #{key} q I T30 x Proute=a Lhint=b\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, quiet: true, invalidate: true, tombstone_ttl: 30,
+                       drop_value: true, p_token: 'route=a', l_token: 'hint=b'
+                     )
+      end
+
+      it 'composes with cas (C<n> stays before tombstone tokens)' do
+        assert_equal "md #{key} C#{cas} I T30 x\r\n",
+                     Dalli::Protocol::Meta::RequestFormatter.meta_delete(
+                       key: key, cas: cas, invalidate: true, tombstone_ttl: 30, drop_value: true
+                     )
+      end
+    end
   end
 
   describe 'meta_arithmetic' do

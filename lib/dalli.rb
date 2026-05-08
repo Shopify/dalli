@@ -67,6 +67,7 @@ end
 require_relative 'dalli/version'
 require_relative 'dalli/middlewares'
 
+require_relative 'dalli/cache_result'
 require_relative 'dalli/compressor'
 require_relative 'dalli/client'
 require_relative 'dalli/key_manager'
