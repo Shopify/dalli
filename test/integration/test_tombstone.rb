@@ -66,6 +66,37 @@ describe 'tombstone (mark-stale) support' do
         assert_predicate dc.get_with_status('tk'), :frozen?
       end
     end
+
+    # Pins the three-state contract: callers branch on miss?/stale?/hit?,
+    # never on value.nil? — because a legitimately cached nil is a hit.
+    it 'distinguishes a cached nil (hit?), an absent key (miss?), and a tombstone (stale?)' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        assert op_addset_succeeds(dc.set('tk-nil', nil))
+        cached_nil = dc.get_with_status('tk-nil')
+
+        assert_predicate cached_nil, :hit?
+        refute_predicate cached_nil, :miss?
+        refute_predicate cached_nil, :stale?
+        assert_nil cached_nil.value
+
+        absent = dc.get_with_status('tk-absent')
+
+        assert_predicate absent, :miss?
+        refute_predicate absent, :hit?
+        refute_predicate absent, :stale?
+        assert_nil absent.value
+
+        assert op_addset_succeeds(dc.set('tk-tomb', 'val'))
+        dc.delete('tk-tomb', invalidate: true, tombstone_ttl: 30)
+        tombstoned = dc.get_with_status('tk-tomb')
+
+        assert_predicate tombstoned, :stale?
+        assert_predicate tombstoned, :hit?
+        refute_predicate tombstoned, :miss?
+      end
+    end
   end
 
   describe 'delete with invalidate: true' do
