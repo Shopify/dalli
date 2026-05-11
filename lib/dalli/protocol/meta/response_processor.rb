@@ -76,12 +76,11 @@ module Dalli
           tokens = error_on_unexpected!([VA, EN, HD])
           return ::Dalli::CacheResult.new(value: nil, miss: true) if tokens.first == EN
 
-          stale = stale_from_tokens(tokens)
           if tokens.first == VA
             value = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
-            ::Dalli::CacheResult.new(value: value, stale: stale)
+            ::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens))
           else
-            ::Dalli::CacheResult.new(value: nil, stale: stale)
+            ::Dalli::CacheResult.new(value: nil, miss: true)
           end
         end
 
