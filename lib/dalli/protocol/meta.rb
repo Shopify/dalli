@@ -11,7 +11,7 @@ module Dalli
     # protocol.  Contains logic for managing connection state to the server (retries, etc),
     # formatting requests to the server, and unpacking responses.
     ##
-    class Meta < Base
+    class Meta < Base # rubocop:disable Metrics/ClassLength
       TERMINATOR = "\r\n"
       SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 

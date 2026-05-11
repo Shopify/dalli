@@ -237,11 +237,11 @@ module Dalli
         end
 
         # Detects the `X` presence flag indicating the item has been marked
-        # stale via a prior `md key I`. Strict equality (rather than
-        # start_with?) avoids false positives if a future value-bearing
-        # flag is introduced beginning with `X`.
+        # stale via a prior `md key I`. Strict equality (Array#any?(pattern)
+        # uses `===`, which for Strings is `==`) avoids false positives if a
+        # future value-bearing flag is introduced beginning with `X`.
         def stale_from_tokens(tokens)
-          tokens.any? { |t| t == 'X' }
+          tokens.any?('X')
         end
 
         def cas_from_tokens(tokens)

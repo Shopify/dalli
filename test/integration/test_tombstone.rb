@@ -17,15 +17,16 @@ describe 'tombstone (mark-stale) support' do
     it 'returns a Dalli::CacheResult with hit? on a normal hit' do
       memcached_persistent do |dc|
         dc.flush
+
         assert op_addset_succeeds(dc.set('tk', 'val'))
 
         result = dc.get_with_status('tk')
 
         assert_kind_of Dalli::CacheResult, result
         assert_equal 'val', result.value
-        assert result.hit?
-        refute result.miss?
-        refute result.stale?
+        assert_predicate result, :hit?
+        refute_predicate result, :miss?
+        refute_predicate result, :stale?
       end
     end
 
@@ -37,22 +38,23 @@ describe 'tombstone (mark-stale) support' do
 
         assert_kind_of Dalli::CacheResult, result
         assert_nil result.value
-        assert result.miss?
-        refute result.hit?
-        refute result.stale?
+        assert_predicate result, :miss?
+        refute_predicate result, :hit?
+        refute_predicate result, :stale?
       end
     end
 
     it 'returns miss? after a regular (non-tombstone) delete' do
       memcached_persistent do |dc|
         dc.flush
+
         assert op_addset_succeeds(dc.set('tk', 'val'))
         dc.delete('tk')
 
         result = dc.get_with_status('tk')
 
-        assert result.miss?
-        refute result.stale?
+        assert_predicate result, :miss?
+        refute_predicate result, :stale?
       end
     end
 
@@ -70,14 +72,15 @@ describe 'tombstone (mark-stale) support' do
     it 'leaves the item readable but marked stale' do
       memcached_persistent do |dc|
         dc.flush
+
         assert op_addset_succeeds(dc.set('tk', 'preserved-val'))
 
         dc.delete('tk', invalidate: true)
         result = dc.get_with_status('tk')
 
-        assert result.stale?, 'expected X flag (stale) after invalidate'
-        assert result.hit?, 'invalidate without drop_value should leave value readable'
-        refute result.miss?
+        assert_predicate result, :stale?, 'expected X flag (stale) after invalidate'
+        assert_predicate result, :hit?, 'invalidate without drop_value should leave value readable'
+        refute_predicate result, :miss?
         assert_equal 'preserved-val', result.value
       end
     end
@@ -85,13 +88,14 @@ describe 'tombstone (mark-stale) support' do
     it 'leaves an empty value when drop_value is also set' do
       memcached_persistent do |dc|
         dc.flush
+
         assert op_addset_succeeds(dc.set('tk', 'should-be-dropped'))
 
         dc.delete('tk', invalidate: true, drop_value: true)
         result = dc.get_with_status('tk')
 
-        assert result.stale?
-        refute result.miss?
+        assert_predicate result, :stale?
+        refute_predicate result, :miss?
         # Value is dropped — empty string, not the original
         refute_equal 'should-be-dropped', result.value
       end
@@ -100,19 +104,20 @@ describe 'tombstone (mark-stale) support' do
     it 'transitions from stale? to miss? after tombstone_ttl elapses' do
       memcached_persistent do |dc|
         dc.flush
+
         assert op_addset_succeeds(dc.set('tk', 'val'))
 
         dc.delete('tk', invalidate: true, tombstone_ttl: 1, drop_value: true)
 
         # Within the tombstone window
-        assert dc.get_with_status('tk').stale?
+        assert_predicate dc.get_with_status('tk'), :stale?
 
         # Past the tombstone window, the X flag should be gone
         sleep 2
         result = dc.get_with_status('tk')
 
-        assert result.miss?, 'tombstone should have expired into a true miss'
-        refute result.stale?
+        assert_predicate result, :miss?, 'tombstone should have expired into a true miss'
+        refute_predicate result, :stale?
       end
     end
 
@@ -124,8 +129,8 @@ describe 'tombstone (mark-stale) support' do
         dc.delete('tk') # no kwargs — regular hard delete
         result = dc.get_with_status('tk')
 
-        assert result.miss?
-        refute result.stale?
+        assert_predicate result, :miss?
+        refute_predicate result, :stale?
       end
     end
 
@@ -137,7 +142,7 @@ describe 'tombstone (mark-stale) support' do
 
         dc.delete_cas('tk', cas, invalidate: true, tombstone_ttl: 30)
 
-        assert dc.get_with_status('tk').stale?
+        assert_predicate dc.get_with_status('tk'), :stale?
       end
     end
   end
@@ -154,7 +159,8 @@ describe 'tombstone (mark-stale) support' do
         assert_equal keys.length, deleted
         keys.each do |k|
           result = dc.get_with_status(k)
-          assert result.stale?, "expected #{k} to be stale after delete_multi(invalidate: true)"
+
+          assert_predicate result, :stale?, "expected #{k} to be stale after delete_multi(invalidate: true)"
           assert_equal "val-#{k}", result.value
         end
       end
@@ -170,7 +176,8 @@ describe 'tombstone (mark-stale) support' do
 
         keys.each do |k|
           result = dc.get_with_status(k)
-          assert result.stale?
+
+          assert_predicate result, :stale?
           refute_equal 'orig', result.value
         end
       end
@@ -201,7 +208,7 @@ describe 'tombstone (mark-stale) support' do
         end
 
         # Outside the quiet block, the tombstone should be visible
-        assert dc.get_with_status('tq').stale?
+        assert_predicate dc.get_with_status('tq'), :stale?
       end
     end
 
