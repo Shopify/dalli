@@ -11,7 +11,7 @@ module Dalli
     # protocol.  Contains logic for managing connection state to the server (retries, etc),
     # formatting requests to the server, and unpacking responses.
     ##
-    class Meta < Base
+    class Meta < Base # rubocop:disable Metrics/ClassLength
       TERMINATOR = "\r\n"
       SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
@@ -114,11 +114,12 @@ module Dalli
 
       def delete_multi_req(keys, req_options = nil)
         routing_kwargs = routing_token_kwargs(req_options)
+        tombstone_extras = tombstone_kwargs(req_options)
         @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
           keys.each do |key|
             encoded_key, base64 = KeyRegularizer.encode(key)
             req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true,
-                                               **routing_kwargs)
+                                               **routing_kwargs, **tombstone_extras)
             write(req)
           end
           write_noop
@@ -178,6 +179,25 @@ module Dalli
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'quiet' => true }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true,
                                     **routing_kwargs)
+        end
+      end
+
+      def get_with_status(key, options = nil)
+        encoded_key, base64 = KeyRegularizer.encode(key)
+        routing_kwargs = routing_token_kwargs(options)
+
+        @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
+          req = RequestFormatter.meta_get(key: encoded_key, value: true, base64: base64,
+                                          **routing_kwargs)
+          write(req)
+          @connection_manager.flush
+          result = response_processor.meta_get_with_status
+          unless attributes.frozen?
+            attributes['value_bytesize'] = result.value.nil? ? 0 : result.value.bytesize
+            attributes['hit_count']  = result.miss? ? 0 : 1
+            attributes['miss_count'] = result.miss? ? 1 : 0
+          end
+          result
         end
       end
 
@@ -313,7 +333,8 @@ module Dalli
         @middlewares_stack.storage_req('memcached.delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                              base64: base64, quiet: quiet?,
-                                             **routing_token_kwargs(options))
+                                             **routing_token_kwargs(options),
+                                             **tombstone_kwargs(options))
           write(req)
           @connection_manager.flush
           response_processor.meta_delete unless quiet?

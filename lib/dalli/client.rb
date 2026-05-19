@@ -94,6 +94,21 @@ module Dalli
     end
 
     ##
+    # Read a key and return a `Dalli::CacheResult` with stale-awareness.
+    #
+    # Unlike `#get`, this always returns a `CacheResult` (never nil). Callers
+    # branch on `result.stale?` / `result.miss?` / `result.hit?` rather than
+    # nil-ness, since a tombstoned item has `stale? == true` with a (possibly
+    # empty) value, while a real cache miss has `miss? == true`.
+    #
+    # Tombstones are produced via `#delete` with `invalidate: true`. See
+    # `#delete` for the request-option keys (`:invalidate`, `:tombstone_ttl`,
+    # `:drop_value`) that create them.
+    def get_with_status(key, req_options = nil)
+      perform(:get_with_status, key, req_options)
+    end
+
+    ##
     # Fetch multiple keys efficiently.
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
@@ -273,10 +288,24 @@ module Dalli
 
     # Delete a key/value pair, verifying existing CAS.
     # Returns true if succeeded, and falsy otherwise.
+    #
+    # `req_options` recognizes the same tombstone keys as `#delete`:
+    # `:invalidate`, `:tombstone_ttl`, `:drop_value`.
     def delete_cas(key, cas = 0, req_options = nil)
       perform(:delete, key, cas, req_options)
     end
 
+    ##
+    # Delete a key.
+    #
+    # `req_options` may include tombstone-mode keys, which leave a short-lived
+    # marker behind so concurrent readers (via `#get_with_status`) can tell a
+    # racing repopulate apart from a true miss:
+    # - `:invalidate` (Boolean) — mark the item stale instead of removing it.
+    # - `:tombstone_ttl` (Integer seconds) — how long the tombstone lives;
+    #   requires `:invalidate`. After this elapses, reads see `miss?`.
+    # - `:drop_value` (Boolean) — drop the stored value but keep the
+    #   tombstone marker, freeing memory while the tombstone lives.
     def delete(key, req_options = nil)
       delete_cas(key, 0, req_options)
     end
@@ -285,9 +314,9 @@ module Dalli
     # Delete multiple keys efficiently in pipelined mode.
     # Returns the number of keys that were successfully deleted.
     #
-    # `req_options` is applied to every delete in the pipeline (e.g.
-    # `meta_flags: ['Proute=...']`). Best-effort; the same options apply to
-    # every key.
+    # `req_options` is applied to every delete in the pipeline. Recognized
+    # tombstone keys (`:invalidate`, `:tombstone_ttl`, `:drop_value`) are
+    # applied uniformly to every key in the batch — see `#delete`.
     def delete_multi(keys, req_options = nil)
       return 0 if keys.empty?
 
