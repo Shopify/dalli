@@ -14,6 +14,11 @@ module Dalli
       keys.map! { |a| @key_manager.validate_key(a.to_s) }
       results = @ring.servers.first.request(:read_multi_req, keys, req_options)
       @key_manager.key_values_without_namespace(results)
+    rescue RetryableNetworkError
+      raise
+    rescue DalliError => e
+      log_server_error(@ring.servers.first, e)
+      {}
     end
 
     ##
@@ -40,13 +45,16 @@ module Dalli
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying pipelined gets because of timeout' }
       retry
+    rescue DalliError => e
+      Dalli.logger.debug { e.inspect }
+      Dalli.logger.debug { 'pipelined gets failed; treating remaining keys as misses' }
+      {}
     end
 
     def setup_requests(keys, req_options = nil)
       groups = groups_for_keys(keys)
       make_getkq_requests(groups, req_options)
 
-      # TODO: How does this exit on a NetworkError
       finish_queries(groups.keys)
     end
 
@@ -79,32 +87,28 @@ module Dalli
 
         begin
           finish_query_for_server(server)
-        rescue Dalli::NetworkError
+        rescue Dalli::RetryableNetworkError
           raise
-        rescue Dalli::DalliError
+        rescue Dalli::DalliError => e
+          log_server_error(server, e)
+          abort_server(server)
           deleted.append(server)
         end
       end
 
       servers.delete_if { |server| deleted.include?(server) }
-    rescue Dalli::NetworkError
+    rescue Dalli::RetryableNetworkError
       abort_without_timeout(servers)
       raise
     end
 
     def finish_query_for_server(server)
       server.pipeline_response_setup
-    rescue Dalli::NetworkError
-      raise
-    rescue Dalli::DalliError => e
-      Dalli.logger.debug { e.inspect }
-      Dalli.logger.debug { "Results from server: #{server.name} will be missing from the results" }
-      raise
     end
 
-    # Swallows Dalli::NetworkError
+    # Swallows Dalli::DalliError
     def abort_without_timeout(servers)
-      servers.each(&:pipeline_abort)
+      servers.each { |server| abort_server(server) }
     end
 
     def fetch_responses(servers, start_time, timeout, &block)
@@ -120,14 +124,22 @@ module Dalli
       end
 
       # Loop through the servers with responses, and
-      # delete any from our list that are finished
+      # delete any from our list that are finished. If a server errors while
+      # reading responses, treat all keys on that server as misses and keep
+      # collecting best-effort responses from the rest of the batch.
       readable_servers.each do |server|
-        servers.delete(server) if process_server(server, &block)
+        begin
+          servers.delete(server) if process_server(server, &block)
+        rescue Dalli::RetryableNetworkError
+          raise
+        rescue Dalli::DalliError => e
+          log_server_error(server, e)
+          abort_server(server)
+          servers.delete(server)
+        end
       end
       servers
-    rescue NetworkError
-      # Abort and raise if we encountered a network error.  This triggers
-      # a retry at the top level on RetryableNetworkError
+    rescue Dalli::RetryableNetworkError
       abort_without_timeout(servers)
       raise
     end
@@ -139,7 +151,7 @@ module Dalli
       timeout - elapsed
     end
 
-    # Swallows Dalli::NetworkError
+    # Swallows Dalli::DalliError
     def abort_with_timeout(servers)
       abort_without_timeout(servers)
       servers.each do |server|
@@ -157,6 +169,17 @@ module Dalli
       end
 
       server.pipeline_complete?
+    end
+
+    def log_server_error(server, error)
+      Dalli.logger.debug { error.inspect }
+      Dalli.logger.debug { "Results from server: #{server.name} will be missing from the results" }
+    end
+
+    def abort_server(server)
+      server.pipeline_abort
+    rescue Dalli::DalliError => e
+      Dalli.logger.debug { e.inspect }
     end
 
     def servers_with_response(servers, timeout)
