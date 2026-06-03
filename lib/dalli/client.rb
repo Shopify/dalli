@@ -101,9 +101,9 @@ module Dalli
     # nil-ness, since a tombstoned item has `stale? == true` with a (possibly
     # empty) value, while a real cache miss has `miss? == true`.
     #
-    # Tombstones are produced via `#delete` with `invalidate: true`. See
-    # `#delete` for the request-option keys (`:invalidate`, `:tombstone_ttl`,
-    # `:drop_value`) that create them.
+    # Tombstones are produced via `#delete` with `invalidate: true`; `drop_value`
+    # can be combined to discard the previous value while keeping the stale marker.
+    # See `#delete` for details.
     def get_with_status(key, req_options = nil)
       perform(:get_with_status, key, req_options)
     end
@@ -289,7 +289,7 @@ module Dalli
     # Delete a key/value pair, verifying existing CAS.
     # Returns true if succeeded, and falsy otherwise.
     #
-    # `req_options` recognizes the same tombstone keys as `#delete`:
+    # `req_options` recognizes the same meta-delete keys as `#delete`:
     # `:invalidate`, `:tombstone_ttl`, `:drop_value`.
     def delete_cas(key, cas = 0, req_options = nil)
       perform(:delete, key, cas, req_options)
@@ -298,14 +298,18 @@ module Dalli
     ##
     # Delete a key.
     #
-    # `req_options` may include tombstone-mode keys, which leave a short-lived
-    # marker behind so concurrent readers (via `#get_with_status`) can tell a
-    # racing repopulate apart from a true miss:
+    # `req_options` may include memcached meta-delete options:
     # - `:invalidate` (Boolean) — mark the item stale instead of removing it.
-    # - `:tombstone_ttl` (Integer seconds) — how long the tombstone lives;
+    #   This is the tombstone marker: `#get_with_status` returns `stale?`, and
+    #   the existing value remains readable unless `:drop_value` is also set.
+    # - `:drop_value` (Boolean) — remove the item value but leave the item.
+    #   Alone this is not a tombstone: reads are a non-stale hit with an empty
+    #   string value.
+    # - `:invalidate` + `:drop_value` — leave a stale tombstone marker with an
+    #   empty value, so readers can distinguish it from a miss without retaining
+    #   the previous value.
+    # - `:tombstone_ttl` (Integer seconds) — how long the stale tombstone lives;
     #   requires `:invalidate`. After this elapses, reads see `miss?`.
-    # - `:drop_value` (Boolean) — drop the stored value but keep the
-    #   tombstone marker, freeing memory while the tombstone lives.
     def delete(key, req_options = nil)
       delete_cas(key, 0, req_options)
     end
@@ -315,7 +319,7 @@ module Dalli
     # Returns the number of keys that were successfully deleted.
     #
     # `req_options` is applied to every delete in the pipeline. Recognized
-    # tombstone keys (`:invalidate`, `:tombstone_ttl`, `:drop_value`) are
+    # meta-delete keys (`:invalidate`, `:tombstone_ttl`, `:drop_value`) are
     # applied uniformly to every key in the batch — see `#delete`.
     def delete_multi(keys, req_options = nil)
       return 0 if keys.empty?

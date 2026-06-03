@@ -99,6 +99,27 @@ describe 'tombstone (mark-stale) support' do
     end
   end
 
+  describe 'delete with drop_value only' do
+    it 'drops the value without marking the item stale' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        # Use a non-raw value so this also proves the zero-byte response from
+        # `md ... x` does not try to unmarshal the previously serialized value.
+        assert op_addset_succeeds(dc.set('tk-x-only', { payload: 'should-be-dropped' }))
+
+        assert dc.delete('tk-x-only', drop_value: true)
+        result = dc.get_with_status('tk-x-only')
+
+        assert_predicate result, :hit?
+        refute_predicate result, :stale?
+        refute_predicate result, :miss?
+        assert_equal '', result.value
+        assert_equal '', dc.get('tk-x-only')
+      end
+    end
+  end
+
   describe 'delete with invalidate: true' do
     it 'leaves the item readable but marked stale' do
       memcached_persistent do |dc|
@@ -128,7 +149,7 @@ describe 'tombstone (mark-stale) support' do
         assert_predicate result, :stale?
         refute_predicate result, :miss?
         # Value is dropped — empty string, not the original
-        refute_equal 'should-be-dropped', result.value
+        assert_equal '', result.value
       end
     end
 
@@ -149,6 +170,19 @@ describe 'tombstone (mark-stale) support' do
 
         assert_predicate result, :miss?, 'tombstone should have expired into a true miss'
         refute_predicate result, :stale?
+      end
+    end
+
+    it 'sanitizes long tombstone_ttl intervals before sending to memcached' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        assert op_addset_succeeds(dc.set('tk-long-ttl', 'val'))
+
+        long_ttl = Dalli::Protocol::TtlSanitizer::MAX_ACCEPTABLE_EXPIRATION_INTERVAL + 1
+        dc.delete('tk-long-ttl', invalidate: true, tombstone_ttl: long_ttl)
+
+        assert_predicate dc.get_with_status('tk-long-ttl'), :stale?
       end
     end
 
@@ -209,7 +243,7 @@ describe 'tombstone (mark-stale) support' do
           result = dc.get_with_status(k)
 
           assert_predicate result, :stale?
-          refute_equal 'orig', result.value
+          assert_equal '', result.value
         end
       end
     end
@@ -221,8 +255,10 @@ describe 'tombstone (mark-stale) support' do
         dc.flush
         dc.set('tk', 'val')
 
-        assert_raises(ArgumentError) do
-          dc.delete('tk', tombstone_ttl: 30)
+        with_nil_logger do
+          assert_raises(ArgumentError) do
+            dc.delete('tk', tombstone_ttl: 30)
+          end
         end
       end
     end
