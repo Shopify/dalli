@@ -99,6 +99,74 @@ describe 'tombstone (mark-stale) support' do
     end
   end
 
+  describe 'Client#get_multi_with_status return shape' do
+    it 'returns CacheResult values for normal hits, stale tombstones, dropped tombstones, and misses' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        assert op_addset_succeeds(dc.set('multi-hit', 'hit-val'))
+        assert op_addset_succeeds(dc.set('multi-stale', 'stale-val'))
+        assert op_addset_succeeds(dc.set('multi-dropped', 'dropped-val'))
+        dc.delete('multi-stale', invalidate: true, tombstone_ttl: 30)
+        dc.delete('multi-dropped', invalidate: true, drop_value: true, tombstone_ttl: 30)
+
+        results = dc.get_multi_with_status('multi-hit', 'multi-stale', 'multi-dropped', 'multi-absent')
+
+        assert_equal %w[multi-absent multi-dropped multi-hit multi-stale], results.keys.sort
+
+        hit = results['multi-hit']
+
+        assert_kind_of Dalli::CacheResult, hit
+        assert_equal 'hit-val', hit.value
+        assert_predicate hit, :hit?
+        refute_predicate hit, :miss?
+        refute_predicate hit, :stale?
+
+        stale = results['multi-stale']
+
+        assert_kind_of Dalli::CacheResult, stale
+        assert_equal 'stale-val', stale.value
+        assert_predicate stale, :hit?
+        refute_predicate stale, :miss?
+        assert_predicate stale, :stale?
+
+        dropped = results['multi-dropped']
+
+        assert_kind_of Dalli::CacheResult, dropped
+        assert_equal '', dropped.value
+        assert_predicate dropped, :hit?
+        refute_predicate dropped, :miss?
+        assert_predicate dropped, :stale?
+
+        absent = results['multi-absent']
+
+        assert_kind_of Dalli::CacheResult, absent
+        assert_nil absent.value
+        assert_predicate absent, :miss?
+        refute_predicate absent, :hit?
+        refute_predicate absent, :stale?
+      end
+    end
+
+    it 'yields a CacheResult for every requested key in block form' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        assert op_addset_succeeds(dc.set('multi-block-hit', 'hit-val'))
+
+        seen = {}
+        dc.get_multi_with_status('multi-block-hit', 'multi-block-absent') do |key, result|
+          seen[key] = result
+        end
+
+        assert_equal %w[multi-block-absent multi-block-hit], seen.keys.sort
+        assert_equal 'hit-val', seen['multi-block-hit'].value
+        assert_predicate seen['multi-block-hit'], :hit?
+        assert_predicate seen['multi-block-absent'], :miss?
+      end
+    end
+  end
+
   describe 'delete with drop_value only' do
     it 'drops the value without marking the item stale' do
       memcached_persistent do |dc|

@@ -233,6 +233,23 @@ describe 'routing tokens (p_token / l_token) passthrough' do
     end
   end
 
+  describe 'get_multi_with_status' do
+    it 'applies routing tokens to every key in the status-aware pipeline' do
+      memcached_persistent do |dc|
+        dc.flush
+        dc.set('a', '1')
+        dc.set('b', '2')
+
+        results = dc.get_multi_with_status('a', 'b', 'missing', **ROUTING_OPTS)
+
+        assert_equal %w[a b missing], results.keys.sort
+        assert_equal '1', results['a'].value
+        assert_equal '2', results['b'].value
+        assert_predicate results['missing'], :miss?
+      end
+    end
+  end
+
   describe 'set_multi (pipelined)' do
     it 'applies routing tokens to every entry in the pipeline' do
       memcached_persistent do |dc|

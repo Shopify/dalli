@@ -112,6 +112,59 @@ module Dalli
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
 
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/MethodLength
+      # rubocop:disable Metrics/PerceivedComplexity
+      def read_multi_with_status_req(keys, req_options = nil)
+        results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
+        optimized_for_raw = @value_marshaller.raw_by_default
+
+        total_value_bytesize = 0
+        @middlewares_stack.retrieve_req_pipeline('memcached.read_multi_with_status', { 'keys' => keys }) do |attributes|
+          routing_suffix = RequestFormatter.routing_tokens(**routing_token_kwargs(req_options))
+          post_get_req = optimized_for_raw ? "v k q#{routing_suffix}\r\n" : "v f k q#{routing_suffix}\r\n"
+          keys.each do |key|
+            @connection_manager.write("mg #{key} #{post_get_req}")
+          end
+          @connection_manager.write("mn\r\n")
+          @connection_manager.flush
+
+          terminator_length = TERMINATOR.length
+          while (line = @connection_manager.readline)
+            break if line == TERMINATOR || line[0, 2] == 'MN'
+            next unless line[0, 3] == 'VA '
+
+            tokens = line.split
+            value = @connection_manager.read_exact(tokens[1].to_i)
+            bitflags = optimized_for_raw ? 0 : response_processor.bitflags_from_tokens(tokens)
+            @connection_manager.read_exact(terminator_length)
+            key = response_processor.key_from_tokens(tokens)
+            next if key.nil?
+
+            total_value_bytesize += value.bytesize
+            results[key] = ::Dalli::CacheResult.new(
+              value: @value_marshaller.retrieve(value, bitflags),
+              stale: response_processor.stale_from_tokens(tokens)
+            )
+          end
+
+          keys.each do |key|
+            results[key] = ::Dalli::CacheResult.new(value: nil, miss: true) unless results.key?(key)
+          end
+
+          unless attributes.frozen?
+            attributes['value_bytesize'] = total_value_bytesize
+            attributes['hit_count'] = results.count { |_key, result| result.hit? }
+            attributes['miss_count'] = results.count { |_key, result| result.miss? }
+          end
+        end
+
+        results
+      end
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/MethodLength
+      # rubocop:enable Metrics/PerceivedComplexity
+
       def delete_multi_req(keys, req_options = nil)
         routing_kwargs = routing_token_kwargs(req_options)
         tombstone_extras = tombstone_kwargs(req_options)

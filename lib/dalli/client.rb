@@ -145,6 +145,35 @@ module Dalli
     end
 
     ##
+    # Fetch multiple keys efficiently and return stale-aware `Dalli::CacheResult`
+    # objects for every requested key.
+    #
+    # Unlike `#get_multi`, the returned hash includes misses so callers can
+    # distinguish a true miss from a tombstoned/stale item for each key:
+    #   { 'key' => #<Dalli::CacheResult ...>, 'missing' => #<Dalli::CacheResult miss? ...> }
+    #
+    # If a block is given, yields key/result pairs one at a time for every
+    # requested key.
+    #
+    # See `get_multi` for documentation on the `req_options` trailing keyword
+    # arguments (e.g. `p_token:` / `l_token:`), including the kwargs-vs-positional caveat.
+    def get_multi_with_status(*keys, **req_options, &block)
+      keys.flatten!
+      keys.compact!
+
+      return {} if keys.empty?
+
+      req_options = nil if req_options.empty?
+      results = pipelined_getter.process_with_status(keys, req_options)
+
+      if block
+        results.each(&block)
+      else
+        results
+      end
+    end
+
+    ##
     # Fetch multiple keys efficiently, including available metadata such as CAS.
     # If a block is given, yields key/data pairs one a time.  Data is an array:
     # [value, cas_id]
