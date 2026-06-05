@@ -153,32 +153,35 @@ describe 'Pipelined Get' do
     end
   end
 
-  it 'supports pipelined get with keys containing Unicode' do
+  it 'supports pipelined get with keys requiring base64 encoding' do
     memcached_persistent do |dc|
       dc.close
       dc.flush
 
-      keys_to_query = ['a', 'b', 'ƒ©åÍÎ']
+      unicode_key = 'ƒ©åÍÎ'
+      space_key = 'space key'
+      crlf_key = "crlf\r\nkey"
+      keys_to_query = ['a', 'b', unicode_key, space_key, crlf_key]
 
       resp = dc.get_multi(keys_to_query)
 
       assert_empty(resp)
 
       dc.set('a', 'foo')
-      dc.set('ƒ©åÍÎ', %w[a b c])
+      dc.set(unicode_key, %w[a b c])
+      dc.set(space_key, 'space')
+      dc.set(crlf_key, 'crlf')
 
       # Invocation without block
       resp = dc.get_multi(keys_to_query)
-      expected_resp = { 'a' => 'foo', Dalli::Protocol::Meta::KeyRegularizer.encode('ƒ©åÍÎ')[0] => %w[a b c] }
+      expected_resp = { 'a' => 'foo', unicode_key => %w[a b c], space_key => 'space', crlf_key => 'crlf' }
 
       assert_equal(expected_resp, resp)
 
       # Invocation with block
       dc.get_multi(keys_to_query) do |k, v|
-        encoded_key = Dalli::Protocol::Meta::KeyRegularizer.encode(k)[0]
-
-        assert(expected_resp.key?(encoded_key) && expected_resp[encoded_key] == v)
-        expected_resp.delete(encoded_key)
+        assert(expected_resp.key?(k) && expected_resp[k] == v)
+        expected_resp.delete(k)
       end
 
       assert_empty expected_resp

@@ -148,6 +148,33 @@ describe 'tombstone (mark-stale) support' do
       end
     end
 
+    it 'returns results under original keys when keys require base64 encoding' do
+      memcached_persistent do |dc|
+        dc.flush
+
+        unicode_key = 'multi-ƒ©åÍÎ'
+        space_key = 'multi space'
+        crlf_key = "multi-crlf\r\nkey"
+        absent_key = "multi-absent\r\nkey"
+
+        assert op_addset_succeeds(dc.set(unicode_key, 'unicode-val'))
+        assert op_addset_succeeds(dc.set(space_key, 'space-val'))
+        assert op_addset_succeeds(dc.set(crlf_key, 'crlf-val'))
+        dc.delete(unicode_key, invalidate: true, tombstone_ttl: 30)
+
+        results = dc.get_multi_with_status(space_key, unicode_key, crlf_key, absent_key)
+
+        assert_equal [absent_key, crlf_key, space_key, unicode_key].sort, results.keys.sort
+        assert_equal 'space-val', results[space_key].value
+        assert_equal 'crlf-val', results[crlf_key].value
+        assert_equal 'unicode-val', results[unicode_key].value
+        assert_predicate results[space_key], :hit?
+        assert_predicate results[crlf_key], :hit?
+        assert_predicate results[unicode_key], :stale?
+        assert_predicate results[absent_key], :miss?
+      end
+    end
+
     it 'yields a CacheResult for every requested key in block form' do
       memcached_persistent do |dc|
         dc.flush

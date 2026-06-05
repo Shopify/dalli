@@ -67,20 +67,22 @@ module Dalli
           tokens.first == EN ? nil : true
         end
 
-        # Stale-aware get that returns a Dalli::CacheResult so callers can
-        # distinguish a tombstoned item (stale?) from a true miss (miss?).
+        # Stale-aware get that returns a Dalli::CacheResult and the raw
+        # response body size so metrics can report wire bytes rather than
+        # calling #bytesize on the deserialized value.
         # The value field may be empty when the tombstone was created with
         # drop_value, which is intentional — callers branch on the
         # predicates rather than nil-ness.
         def meta_get_with_status
           tokens = error_on_unexpected!([VA, EN, HD])
-          return ::Dalli::CacheResult.new(value: nil, miss: true) if tokens.first == EN
+          return [::Dalli::CacheResult.new(value: nil, miss: true), 0] if tokens.first == EN
 
           if tokens.first == VA
-            value = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
-            ::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens))
+            raw_value = read_data(tokens[1].to_i)
+            value = @value_marshaller.retrieve(raw_value, bitflags_from_tokens(tokens))
+            [::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens)), raw_value.bytesize]
           else
-            ::Dalli::CacheResult.new(value: nil, miss: true)
+            [::Dalli::CacheResult.new(value: nil, miss: true), 0]
           end
         end
 

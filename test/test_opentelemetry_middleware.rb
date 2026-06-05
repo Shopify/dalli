@@ -121,4 +121,95 @@ describe 'OpenTelemetry middleware' do
       assert_equal 1, attributes['miss_count'], 'expected miss_count to be 1 (one miss)'
     end
   end
+
+  it 'uses raw response bytes for get_with_status value_bytesize on non-string values' do
+    OTEL_EXPORTER.reset if OTEL_EXPORTER.respond_to?(:reset)
+
+    memcached(21_453, '', { middlewares: [Dalli::OpentelemetryMiddleware] }) do |dc, _|
+      test_value = { 'payload' => %w[a b c] }
+
+      assert op_addset_succeeds(dc.set('otel:status_hash', test_value, 30))
+
+      result = dc.get_with_status('otel:status_hash')
+
+      assert_equal test_value, result.value
+      assert_predicate result, :hit?
+      refute_predicate result, :stale?
+      refute_predicate result, :miss?
+
+      finished = OTEL_EXPORTER.respond_to?(:finished_spans) ? OTEL_EXPORTER.finished_spans : []
+      get_with_status_span = finished.find { |span| span.name == 'memcached.get_with_status' }
+
+      refute_nil get_with_status_span, 'expected to find a memcached.get_with_status span'
+
+      attributes = get_with_status_span.attributes
+
+      assert_equal Marshal.dump(test_value).bytesize, attributes['value_bytesize']
+      assert_equal 1, attributes['hit_count'], 'expected fresh result to count as a hit'
+      assert_equal 0, attributes['miss_count'], 'expected fresh result not to count as a miss'
+      assert_equal 0, attributes['stale_count'], 'expected fresh result not to count as stale'
+    end
+  end
+
+  it 'counts stale get_with_status results separately from fresh hits' do
+    OTEL_EXPORTER.reset if OTEL_EXPORTER.respond_to?(:reset)
+
+    memcached(21_453, '', { middlewares: [Dalli::OpentelemetryMiddleware] }) do |dc, _|
+      assert op_addset_succeeds(dc.set('otel:status_stale', 'stale-value', 30))
+      assert dc.delete('otel:status_stale', invalidate: true, tombstone_ttl: 30)
+
+      result = dc.get_with_status('otel:status_stale')
+
+      assert_predicate result, :hit?
+      assert_predicate result, :stale?
+      refute_predicate result, :miss?
+
+      finished = OTEL_EXPORTER.respond_to?(:finished_spans) ? OTEL_EXPORTER.finished_spans : []
+      get_with_status_span = finished.find { |span| span.name == 'memcached.get_with_status' }
+
+      refute_nil get_with_status_span, 'expected to find a memcached.get_with_status span'
+
+      attributes = get_with_status_span.attributes
+
+      assert_equal 0, attributes['hit_count'], 'expected stale result not to count as a fresh hit'
+      assert_equal 1, attributes['miss_count'], 'expected stale result to count as non-fresh'
+      assert_equal 1, attributes['stale_count'], 'expected stale_count to report the stale result'
+    end
+  end
+
+  it 'counts stale read_multi_with_status results separately from fresh hits' do
+    OTEL_EXPORTER.reset if OTEL_EXPORTER.respond_to?(:reset)
+
+    memcached(21_453, '', { middlewares: [Dalli::OpentelemetryMiddleware] }) do |dc, _|
+      assert op_addset_succeeds(dc.set('otel:status_hit', 'hit-value', 30))
+      assert op_addset_succeeds(dc.set('otel:status_stale', 'stale-value', 30))
+      assert op_addset_succeeds(dc.set('otel:status_dropped', 'dropped-value', 30))
+      assert dc.delete('otel:status_stale', invalidate: true, tombstone_ttl: 30)
+      assert dc.delete('otel:status_dropped', invalidate: true, drop_value: true, tombstone_ttl: 30)
+
+      results = dc.get_multi_with_status(
+        'otel:status_hit',
+        'otel:status_stale',
+        'otel:status_dropped',
+        'otel:status_absent'
+      )
+
+      assert_predicate results['otel:status_hit'], :hit?
+      refute_predicate results['otel:status_hit'], :stale?
+      assert_predicate results['otel:status_stale'], :stale?
+      assert_predicate results['otel:status_dropped'], :stale?
+      assert_predicate results['otel:status_absent'], :miss?
+
+      finished = OTEL_EXPORTER.respond_to?(:finished_spans) ? OTEL_EXPORTER.finished_spans : []
+      read_multi_with_status_span = finished.find { |span| span.name == 'memcached.read_multi_with_status' }
+
+      refute_nil read_multi_with_status_span, 'expected to find a memcached.read_multi_with_status span'
+
+      attributes = read_multi_with_status_span.attributes
+
+      assert_equal 1, attributes['hit_count'], 'expected only the fresh result to count as a hit'
+      assert_equal 3, attributes['miss_count'], 'expected stale and absent results to count as non-fresh'
+      assert_equal 2, attributes['stale_count'], 'expected stale_count to report both tombstones'
+    end
+  end
 end
