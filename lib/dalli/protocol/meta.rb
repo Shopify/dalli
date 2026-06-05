@@ -11,7 +11,7 @@ module Dalli
     # protocol.  Contains logic for managing connection state to the server (retries, etc),
     # formatting requests to the server, and unpacking responses.
     ##
-    class Meta < Base
+    class Meta < Base # rubocop:disable Metrics/ClassLength
       TERMINATOR = "\r\n"
       SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
@@ -70,14 +70,13 @@ module Dalli
         # Pre-allocate the results hash with expected size
         results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
         optimized_for_raw = @value_marshaller.raw_by_default
-        key_index = optimized_for_raw ? 2 : 3
 
         total_value_bytesize = 0
         @middlewares_stack.retrieve_req_pipeline('memcached.read_multi', { 'keys' => keys }) do |attributes|
           routing_suffix = RequestFormatter.routing_tokens(**routing_token_kwargs(req_options))
           post_get_req = optimized_for_raw ? "v k q#{routing_suffix}\r\n" : "v f k q#{routing_suffix}\r\n"
           keys.each do |key|
-            @connection_manager.write("mg #{key} #{post_get_req}")
+            write_read_multi_get(key, post_get_req)
           end
           @connection_manager.write("mn\r\n")
           @connection_manager.flush
@@ -92,7 +91,7 @@ module Dalli
             value = @connection_manager.read_exact(tokens[1].to_i)
             bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
             @connection_manager.read_exact(terminator_length) # read the terminator
-            key = tokens[key_index]&.byteslice(1..-1)
+            key = response_processor.key_from_tokens(tokens)
             next if key.nil?
 
             total_value_bytesize += value.bytesize
@@ -112,13 +111,83 @@ module Dalli
       # rubocop:enable Metrics/PerceivedComplexity
       # rubocop:enable Metrics/MethodLength
 
+      # rubocop:disable Metrics/CyclomaticComplexity
+      # rubocop:disable Metrics/MethodLength
+      # rubocop:disable Metrics/PerceivedComplexity
+      def read_multi_with_status_req(keys, req_options = nil)
+        results = SUPPORTS_CAPACITY ? Hash.new(nil, capacity: keys.size) : {}
+        optimized_for_raw = @value_marshaller.raw_by_default
+
+        total_value_bytesize = 0
+        fresh_hit_count = 0
+        stale_count = 0
+        @middlewares_stack.retrieve_req_pipeline('memcached.read_multi_with_status', { 'keys' => keys }) do |attributes|
+          routing_suffix = RequestFormatter.routing_tokens(**routing_token_kwargs(req_options))
+          post_get_req = optimized_for_raw ? "v k q#{routing_suffix}\r\n" : "v f k q#{routing_suffix}\r\n"
+          keys.each do |key|
+            write_read_multi_get(key, post_get_req)
+          end
+          @connection_manager.write("mn\r\n")
+          @connection_manager.flush
+
+          terminator_length = TERMINATOR.length
+          while (line = @connection_manager.readline)
+            break if line == TERMINATOR || line[0, 2] == 'MN'
+            next unless line[0, 3] == 'VA '
+
+            tokens = line.split
+            value = @connection_manager.read_exact(tokens[1].to_i)
+            bitflags = optimized_for_raw ? 0 : response_processor.bitflags_from_tokens(tokens)
+            @connection_manager.read_exact(terminator_length)
+            key = response_processor.key_from_tokens(tokens)
+            next if key.nil?
+
+            stale = response_processor.stale_from_tokens(tokens)
+            total_value_bytesize += value.bytesize
+            if stale
+              stale_count += 1
+            else
+              fresh_hit_count += 1
+            end
+            results[key] = ::Dalli::CacheResult.new(
+              value: @value_marshaller.retrieve(value, bitflags),
+              stale: stale
+            )
+          end
+
+          keys.each do |key|
+            results[key] = ::Dalli::CacheResult.new(value: nil, miss: true) unless results.key?(key)
+          end
+
+          unless attributes.frozen?
+            # Stale tombstones are CacheResult#hit? at the API layer, but
+            # count as non-fresh for hit-rate metrics.
+            attributes['value_bytesize'] = total_value_bytesize
+            attributes['hit_count'] = fresh_hit_count
+            attributes['miss_count'] = keys.size - fresh_hit_count
+            attributes['stale_count'] = stale_count
+          end
+        end
+
+        results
+      end
+      # rubocop:enable Metrics/CyclomaticComplexity
+      # rubocop:enable Metrics/MethodLength
+      # rubocop:enable Metrics/PerceivedComplexity
+
+      def write_read_multi_get(key, post_get_req)
+        encoded_key, base64 = KeyRegularizer.encode(key)
+        @connection_manager.write("mg #{encoded_key}#{' b' if base64} #{post_get_req}")
+      end
+
       def delete_multi_req(keys, req_options = nil)
         routing_kwargs = routing_token_kwargs(req_options)
+        tombstone_extras = tombstone_kwargs(req_options)
         @middlewares_stack.storage_req_pipeline('delete_multi', { 'keys' => keys }) do
           keys.each do |key|
             encoded_key, base64 = KeyRegularizer.encode(key)
             req = RequestFormatter.meta_delete(key: encoded_key, base64: base64, quiet: true,
-                                               **routing_kwargs)
+                                               **routing_kwargs, **tombstone_extras)
             write(req)
           end
           write_noop
@@ -178,6 +247,29 @@ module Dalli
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'quiet' => true }) do
           RequestFormatter.meta_get(key: encoded_key, return_cas: true, base64: base64, quiet: true,
                                     **routing_kwargs)
+        end
+      end
+
+      def get_with_status(key, options = nil)
+        encoded_key, base64 = KeyRegularizer.encode(key)
+        routing_kwargs = routing_token_kwargs(options)
+
+        @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
+          req = RequestFormatter.meta_get(key: encoded_key, value: true, base64: base64,
+                                          **routing_kwargs)
+          write(req)
+          @connection_manager.flush
+          result, raw_value_bytesize = response_processor.meta_get_with_status
+          unless attributes.frozen?
+            # Stale tombstones are CacheResult#hit? at the API layer, but
+            # count as non-fresh for hit-rate metrics.
+            fresh_hit = result.hit? && !result.stale?
+            attributes['value_bytesize'] = raw_value_bytesize
+            attributes['hit_count'] = fresh_hit ? 1 : 0
+            attributes['miss_count'] = fresh_hit ? 0 : 1
+            attributes['stale_count'] = result.stale? ? 1 : 0
+          end
+          result
         end
       end
 
@@ -313,7 +405,8 @@ module Dalli
         @middlewares_stack.storage_req('memcached.delete', { 'keys' => key, 'cas' => cas }) do
           req = RequestFormatter.meta_delete(key: encoded_key, cas: cas,
                                              base64: base64, quiet: quiet?,
-                                             **routing_token_kwargs(options))
+                                             **routing_token_kwargs(options),
+                                             **tombstone_kwargs(options))
           write(req)
           @connection_manager.flush
           response_processor.meta_delete unless quiet?

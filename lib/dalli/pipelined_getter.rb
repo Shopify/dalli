@@ -16,6 +16,27 @@ module Dalli
       @key_manager.key_values_without_namespace(results)
     end
 
+    def process_with_status(keys, req_options = nil)
+      return {} if keys.empty?
+
+      @ring.lock do
+        groups = groups_for_keys(keys)
+        results = groups.each_with_object({}) do |(server, keys_for_server), hash|
+          hash.merge!(server.request(:read_multi_with_status_req, keys_for_server, req_options))
+        rescue RetryableNetworkError
+          raise
+        rescue DalliError => e
+          Dalli.logger.debug { e.inspect }
+          Dalli.logger.debug { "unable to get keys for server #{server.name}" }
+        end
+        @key_manager.key_values_without_namespace(results)
+      end
+    rescue RetryableNetworkError => e
+      Dalli.logger.debug { e.inspect }
+      Dalli.logger.debug { 'retrying pipelined get with status because of timeout' }
+      retry
+    end
+
     ##
     # Yields, one at a time, keys and their values+attributes.
     #

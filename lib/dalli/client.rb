@@ -94,6 +94,21 @@ module Dalli
     end
 
     ##
+    # Read a key and return a `Dalli::CacheResult` with stale-awareness.
+    #
+    # Unlike `#get`, this always returns a `CacheResult` (never nil). Callers
+    # branch on `result.stale?` / `result.miss?` / `result.hit?` rather than
+    # nil-ness, since a tombstoned item has `stale? == true` with a (possibly
+    # empty) value, while a real cache miss has `miss? == true`.
+    #
+    # Tombstones are produced via `#delete` with `invalidate: true`; `drop_value`
+    # can be combined to discard the previous value while keeping the stale marker.
+    # See `#delete` for details.
+    def get_with_status(key, req_options = nil)
+      perform(:get_with_status, key, req_options)
+    end
+
+    ##
     # Fetch multiple keys efficiently.
     # If a block is given, yields key/value pairs one at a time.
     # Otherwise returns a hash of { 'key' => 'value', 'key2' => 'value1' }
@@ -126,6 +141,35 @@ module Dalli
         {}.tap do |hash|
           pipelined_getter.process(keys, req_options) { |k, data| hash[k] = data.first }
         end
+      end
+    end
+
+    ##
+    # Fetch multiple keys efficiently and return stale-aware `Dalli::CacheResult`
+    # objects for every requested key.
+    #
+    # Unlike `#get_multi`, the returned hash includes misses so callers can
+    # distinguish a true miss from a tombstoned/stale item for each key:
+    #   { 'key' => #<Dalli::CacheResult ...>, 'missing' => #<Dalli::CacheResult miss? ...> }
+    #
+    # If a block is given, yields key/result pairs one at a time for every
+    # requested key.
+    #
+    # See `get_multi` for documentation on the `req_options` trailing keyword
+    # arguments (e.g. `p_token:` / `l_token:`), including the kwargs-vs-positional caveat.
+    def get_multi_with_status(*keys, **req_options, &block)
+      keys.flatten!
+      keys.compact!
+
+      return {} if keys.empty?
+
+      req_options = nil if req_options.empty?
+      results = pipelined_getter.process_with_status(keys, req_options)
+
+      if block
+        results.each(&block)
+      else
+        results
       end
     end
 
@@ -273,10 +317,28 @@ module Dalli
 
     # Delete a key/value pair, verifying existing CAS.
     # Returns true if succeeded, and falsy otherwise.
+    #
+    # `req_options` recognizes the same meta-delete keys as `#delete`:
+    # `:invalidate`, `:tombstone_ttl`, `:drop_value`.
     def delete_cas(key, cas = 0, req_options = nil)
       perform(:delete, key, cas, req_options)
     end
 
+    ##
+    # Delete a key.
+    #
+    # `req_options` may include memcached meta-delete options:
+    # - `:invalidate` (Boolean) — mark the item stale instead of removing it.
+    #   This is the tombstone marker: `#get_with_status` returns `stale?`, and
+    #   the existing value remains readable unless `:drop_value` is also set.
+    # - `:drop_value` (Boolean) — remove the item value but leave the item.
+    #   Alone this is not a tombstone: reads are a non-stale hit with an empty
+    #   string value.
+    # - `:invalidate` + `:drop_value` — leave a stale tombstone marker with an
+    #   empty value, so readers can distinguish it from a miss without retaining
+    #   the previous value.
+    # - `:tombstone_ttl` (Integer seconds) — how long the stale tombstone lives;
+    #   requires `:invalidate`. After this elapses, reads see `miss?`.
     def delete(key, req_options = nil)
       delete_cas(key, 0, req_options)
     end
@@ -285,9 +347,9 @@ module Dalli
     # Delete multiple keys efficiently in pipelined mode.
     # Returns the number of keys that were successfully deleted.
     #
-    # `req_options` is applied to every delete in the pipeline (e.g.
-    # `meta_flags: ['Proute=...']`). Best-effort; the same options apply to
-    # every key.
+    # `req_options` is applied to every delete in the pipeline. Recognized
+    # meta-delete keys (`:invalidate`, `:tombstone_ttl`, `:drop_value`) are
+    # applied uniformly to every key in the batch — see `#delete`.
     def delete_multi(keys, req_options = nil)
       return 0 if keys.empty?
 

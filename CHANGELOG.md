@@ -4,6 +4,18 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Add tombstone (mark-stale) support to `Client#delete` / `delete_cas` /
+  `delete_multi` via new `:invalidate`, `:tombstone_ttl`, `:drop_value`
+  request-option keys (corresponding to meta-protocol `I`, `T`, `x` flags
+  on `md`). A tombstoned item lives briefly in a "stale" window so
+  concurrent readers can tell a racing repopulate apart from a true miss
+  — useful for high-concurrency cache invalidation. (drinkbeer)
+- Add `Client#get_with_status` returning a `Dalli::CacheResult` value
+  object with `value` / `stale?` / `miss?` / `hit?` predicates. Unlike
+  `#get`, it always returns a result (never nil) and surfaces the
+  meta-protocol `X` (stale) response flag, letting callers distinguish
+  a tombstone window from a true miss without changing the return shape
+  of `get`. (drinkbeer)
 - Fix cannot read response data included terminator `\r\n` when use meta protocol (matsubara0507)
 - Remove binary protocol support (grcooper)
 - Add support for `raw` client option (nherson)

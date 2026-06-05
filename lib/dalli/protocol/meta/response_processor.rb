@@ -67,6 +67,25 @@ module Dalli
           tokens.first == EN ? nil : true
         end
 
+        # Stale-aware get that returns a Dalli::CacheResult and the raw
+        # response body size so metrics can report wire bytes rather than
+        # calling #bytesize on the deserialized value.
+        # The value field may be empty when the tombstone was created with
+        # drop_value, which is intentional — callers branch on the
+        # predicates rather than nil-ness.
+        def meta_get_with_status
+          tokens = error_on_unexpected!([VA, EN, HD])
+          return [::Dalli::CacheResult.new(value: nil, miss: true), 0] if tokens.first == EN
+
+          if tokens.first == VA
+            raw_value = read_data(tokens[1].to_i)
+            value = @value_marshaller.retrieve(raw_value, bitflags_from_tokens(tokens))
+            [::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens)), raw_value.bytesize]
+          else
+            [::Dalli::CacheResult.new(value: nil, miss: true), 0]
+          end
+        end
+
         def meta_set_with_cas
           tokens = error_on_unexpected!([HD, NS, NF, EX])
           return false unless tokens.first == HD
@@ -216,6 +235,14 @@ module Dalli
 
         def bitflags_from_tokens(tokens)
           value_from_tokens(tokens, 'f')&.to_i
+        end
+
+        # Detects the `X` presence flag indicating the item has been marked
+        # stale via a prior `md key I`. Strict equality (Array#any?(pattern)
+        # uses `===`, which for Strings is `==`) avoids false positives if a
+        # future value-bearing flag is introduced beginning with `X`.
+        def stale_from_tokens(tokens)
+          tokens.any?('X')
         end
 
         def cas_from_tokens(tokens)

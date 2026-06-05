@@ -42,12 +42,18 @@ module Dalli
           cmd << TERMINATOR
         end
 
-        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false, p_token: nil, l_token: nil)
+        def self.meta_delete(key:, cas: nil, ttl: nil, base64: false, quiet: false, p_token: nil, l_token: nil,
+                             invalidate: false, tombstone_ttl: nil, drop_value: false)
+          raise ArgumentError, 'tombstone_ttl requires invalidate: true' if tombstone_ttl && !invalidate
+
           cmd = "md #{key}"
           cmd << ' b' if base64
           cmd << cas_string(cas)
           cmd << " T#{ttl}" if ttl
           cmd << ' q' if quiet
+          cmd << ' I' if invalidate
+          cmd << " T#{Integer(tombstone_ttl)}" if tombstone_ttl
+          cmd << ' x' if drop_value
           cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd + TERMINATOR
         end
