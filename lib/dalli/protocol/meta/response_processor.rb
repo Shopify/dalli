@@ -215,13 +215,14 @@ module Dalli
         end
 
         def error_on_unexpected!(expected_codes)
-          tokens = next_line_to_tokens
+          line = read_line
+          tokens = line&.split || []
 
           return tokens if expected_codes.include?(tokens.first)
 
-          raise Dalli::ServerError if tokens.first == SERVER_ERROR
+          raise Dalli::ServerError, line if tokens.first == SERVER_ERROR
 
-          raise Dalli::DalliError, "Response error: #{tokens.first}"
+          raise Dalli::DalliError, "Response error: #{line}"
         end
 
         def meta_flags_from_tokens(tokens)
