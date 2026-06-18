@@ -14,6 +14,10 @@ end
 
 describe Dalli::Protocol::Meta::ResponseProcessor do
   it 'includes the full unexpected response line in DalliError messages' do
+    # Representative CLIENT_ERROR lines returned by memcached. The response
+    # processor treats each as an unexpected response code, but should preserve
+    # the full response line in the raised DalliError.
+
     response_cases = [
       [
         # e.g. an unsupported/unknown meta-protocol flag reaches memcached.
