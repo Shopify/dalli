@@ -12,6 +12,43 @@ class ResponseProcessorTestIO
   end
 end
 
+class PipelinedResponseErrorTestBuffer
+  attr_reader :processed_count
+
+  def initialize(*responses)
+    @responses = responses
+    @processed_count = 0
+    @cleared = false
+  end
+
+  def read; end
+
+  def process_single_getk_response
+    @processed_count += 1
+    @responses.shift || [nil, nil, nil, nil, nil]
+  end
+
+  def clear
+    @cleared = true
+  end
+
+  def in_progress?
+    !@cleared
+  end
+end
+
+class PipelinedResponseErrorTestConnectionManager
+  attr_reader :finished
+
+  def finish_request!
+    @finished = true
+  end
+
+  def error_on_request!(err)
+    raise err
+  end
+end
+
 describe Dalli::Protocol::Meta::ResponseProcessor do
   it 'includes the full unexpected response line in DalliError messages' do
     # Representative CLIENT_ERROR lines returned by memcached. The response
@@ -72,5 +109,101 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
 
       assert_equal line.chomp("\r\n"), err.message
     end
+  end
+
+  it 'records pipelined error responses instead of treating them as values or terminators' do
+    response_cases = [
+      ["CLIENT_ERROR invalid flag\r\n", Dalli::DalliError, 'Response error: CLIENT_ERROR invalid flag'],
+      [
+        "SERVER_ERROR proxy write to backend failed\r\n",
+        Dalli::ServerError,
+        'SERVER_ERROR proxy write to backend failed'
+      ],
+      ["ERROR\r\n", Dalli::DalliError, 'Response error: ERROR']
+    ]
+
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(nil, nil)
+
+    response_cases.each do |line, error_class, error_message|
+      bytes, status, cas, key, value, error = processor.getk_response_from_buffer(line)
+
+      assert_equal line.bytesize, bytes
+      assert_equal false, status
+      assert_nil cas
+      assert_nil key
+      assert_nil value
+      assert_instance_of error_class, error
+      assert_equal error_message, error.message
+    end
+  end
+
+  it 'identifies MN as the pipelined noop terminator' do
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(nil, nil)
+
+    bytes, status, cas, key, value, error = processor.getk_response_from_buffer("MN\r\n")
+
+    assert_equal "MN\r\n".bytesize, bytes
+    assert_equal true, status
+    assert_nil cas
+    assert_nil key
+    assert_nil value
+    assert_nil error
+  end
+
+  it 'raises and drains the pipeline when the first pipelined response is CLIENT_ERROR' do
+    assert_pipelined_error_drained(
+      [false, nil, nil, nil, Dalli::DalliError.new('Response error: CLIENT_ERROR invalid flag')],
+      valid_pipeline_value('a', 'foo'),
+      pipeline_terminator,
+      error_class: Dalli::DalliError,
+      error_message: 'Response error: CLIENT_ERROR invalid flag'
+    )
+  end
+
+  it 'raises and drains the pipeline when a middle pipelined response is SERVER_ERROR' do
+    assert_pipelined_error_drained(
+      valid_pipeline_value('a', 'foo'),
+      [false, nil, nil, nil, Dalli::ServerError.new('SERVER_ERROR proxy write to backend failed')],
+      valid_pipeline_value('b', 'bar'),
+      pipeline_terminator,
+      error_class: Dalli::ServerError,
+      error_message: 'SERVER_ERROR proxy write to backend failed'
+    )
+  end
+
+  it 'raises and drains the pipeline when the last pipelined response is ERROR' do
+    assert_pipelined_error_drained(
+      valid_pipeline_value('a', 'foo'),
+      valid_pipeline_value('b', 'bar'),
+      [false, nil, nil, nil, Dalli::DalliError.new('Response error: ERROR')],
+      pipeline_terminator,
+      error_class: Dalli::DalliError,
+      error_message: 'Response error: ERROR'
+    )
+  end
+
+  def valid_pipeline_value(key, value)
+    [true, nil, key, value, nil]
+  end
+
+  def pipeline_terminator
+    [true, nil, nil, nil, nil]
+  end
+
+  def assert_pipelined_error_drained(*responses, error_class:, error_message:)
+    buffer = PipelinedResponseErrorTestBuffer.new(*responses)
+    connection_manager = PipelinedResponseErrorTestConnectionManager.new
+    server = Dalli::Protocol::Base.allocate
+    server.instance_variable_set(:@response_buffer, buffer)
+    server.instance_variable_set(:@connection_manager, connection_manager)
+
+    err = assert_raises(error_class) do
+      server.pipeline_next_responses
+    end
+
+    assert_equal error_message, err.message
+    assert_equal responses.length, buffer.processed_count
+    assert connection_manager.finished
+    refute buffer.in_progress?
   end
 end

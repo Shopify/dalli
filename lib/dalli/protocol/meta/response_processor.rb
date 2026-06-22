@@ -21,7 +21,10 @@ module Dalli
         STAT = 'STAT'
         VA = 'VA'
         VERSION = 'VERSION'
+        CLIENT_ERROR = 'CLIENT_ERROR'
+        ERROR = 'ERROR'
         SERVER_ERROR = 'SERVER_ERROR'
+        ERROR_RESPONSES = [CLIENT_ERROR, SERVER_ERROR, ERROR].freeze
 
         def initialize(io_source, value_marshaller)
           @io_source = io_source
@@ -141,22 +144,38 @@ module Dalli
         end
 
         def consume_all_responses_until_mn
-          tokens = next_line_to_tokens
+          error = nil
+          line = read_line
+          tokens = line&.split || []
 
-          tokens = next_line_to_tokens while tokens.first != MN
+          while tokens.first != MN
+            error ||= response_error_from_line(line) if error_response?(tokens.first)
+            line = read_line
+            tokens = line&.split || []
+          end
+
+          raise error if error
+
           true
         end
 
         # In quiet mode, only error responses (NF) are sent, success (HD) is suppressed.
         # Returns the count of NF (not found) responses.
         def count_not_found_responses_until_mn
+          error = nil
           not_found_count = 0
-          tokens = next_line_to_tokens
+          line = read_line
+          tokens = line&.split || []
 
           while tokens.first != MN
+            error ||= response_error_from_line(line) if error_response?(tokens.first)
             not_found_count += 1 if tokens.first == NF
-            tokens = next_line_to_tokens
+            line = read_line
+            tokens = line&.split || []
           end
+
+          raise error if error
+
           not_found_count
         end
 
@@ -170,7 +189,7 @@ module Dalli
 
         def full_response_from_buffer(tokens, body, resp_size)
           value = @value_marshaller.retrieve(body, bitflags_from_tokens(tokens))
-          [resp_size, tokens.first == VA, cas_from_tokens(tokens), key_from_tokens(tokens), value]
+          [resp_size, tokens.first == VA, cas_from_tokens(tokens), key_from_tokens(tokens), value, nil]
         end
 
         ##
@@ -185,20 +204,26 @@ module Dalli
         ##
         def getk_response_from_buffer(buf)
           # There's no header in the buffer, so don't advance
-          return [0, nil, nil, nil, nil] unless contains_header?(buf)
+          return [0, nil, nil, nil, nil, nil] unless contains_header?(buf)
 
           tokens, header_len, body_len = tokens_from_header_buffer(buf)
 
-          # We have a complete response that has no body.
-          # This is either the response to the terminating
-          # noop or, if the status is not MN, an intermediate
-          # error response that needs to be discarded.
-          return [header_len, true, nil, nil, nil] if body_len.zero?
+          # Error responses from an upstream proxy/partition are explicitly
+          # discarded and must not be returned to callers as raw values or
+          # associated with any requested key.
+          if error_response?(tokens.first)
+            return [header_len, false, nil, nil, nil, response_error_from_line(header_from_buffer(buf))]
+          end
+
+          # We have a complete response that has no body.  Only MN is the
+          # response to the terminating noop; other body-less responses are
+          # discarded.
+          return [header_len, tokens.first == MN, nil, nil, nil, nil] if body_len.zero?
 
           resp_size = header_len + body_len + TERMINATOR.length
           # The header is in the buffer, but the body is not.  As we don't have
           # a complete response, don't advance the buffer
-          return [0, nil, nil, nil, nil] unless buf.bytesize >= resp_size
+          return [0, nil, nil, nil, nil, nil] unless buf.bytesize >= resp_size
 
           # The full response is in our buffer, so parse it and return
           # the values
@@ -220,9 +245,20 @@ module Dalli
 
           return tokens if expected_codes.include?(tokens.first)
 
-          raise Dalli::ServerError, line if tokens.first == SERVER_ERROR
+          raise response_error_from_line(line) if error_response?(tokens.first)
 
           raise Dalli::DalliError, "Response error: #{line}"
+        end
+
+        def response_error_from_line(line)
+          tokens = line&.split || []
+          return Dalli::ServerError.new(line) if tokens.first == SERVER_ERROR
+
+          Dalli::DalliError.new("Response error: #{line}")
+        end
+
+        def error_response?(code)
+          ERROR_RESPONSES.include?(code)
         end
 
         def meta_flags_from_tokens(tokens)

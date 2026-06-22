@@ -96,6 +96,7 @@ module Dalli
       # Returns nothing.
       def pipeline_response_setup
         verify_pipelined_state(:getkq)
+        @pipeline_error = nil
         write_noop
         response_buffer.reset
       end
@@ -112,10 +113,12 @@ module Dalli
 
         response_buffer.read
 
-        status, cas, key, value = response_buffer.process_single_getk_response
+        status, cas, key, value, error = response_buffer.process_single_getk_response
         # status is not nil only if we have a full response to parse
         # in the buffer
         until status.nil?
+          @pipeline_error ||= error if error
+
           # If the status is ok and key is nil, then this is the response
           # to the noop at the end of the pipeline
           finish_pipeline && break if status && key.nil?
@@ -125,7 +128,13 @@ module Dalli
           values[key] = [value, cas] unless key.nil?
 
           # Get the next response from the buffer
-          status, cas, key, value = response_buffer.process_single_getk_response
+          status, cas, key, value, error = response_buffer.process_single_getk_response
+        end
+
+        if pipeline_complete? && @pipeline_error
+          error = @pipeline_error
+          @pipeline_error = nil
+          raise error
         end
 
         values
@@ -139,6 +148,7 @@ module Dalli
       #
       # Returns nothing.
       def pipeline_abort
+        @pipeline_error = nil
         response_buffer.clear
         @connection_manager.abort_request!
         return true unless connected?
