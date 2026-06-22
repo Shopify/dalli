@@ -128,7 +128,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
       bytes, status, cas, key, value, error = processor.getk_response_from_buffer(line)
 
       assert_equal line.bytesize, bytes
-      assert_equal false, status
+      refute(status)
       assert_nil cas
       assert_nil key
       assert_nil value
@@ -143,7 +143,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
     bytes, status, cas, key, value, error = processor.getk_response_from_buffer("MN\r\n")
 
     assert_equal "MN\r\n".bytesize, bytes
-    assert_equal true, status
+    assert(status)
     assert_nil cas
     assert_nil key
     assert_nil value
@@ -204,6 +204,6 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
     assert_equal error_message, err.message
     assert_equal responses.length, buffer.processed_count
     assert connection_manager.finished
-    refute buffer.in_progress?
+    refute_predicate(buffer, :in_progress?)
   end
 end

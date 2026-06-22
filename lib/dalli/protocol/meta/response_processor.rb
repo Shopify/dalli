@@ -145,13 +145,9 @@ module Dalli
 
         def consume_all_responses_until_mn
           error = nil
-          line = read_line
-          tokens = line&.split || []
 
-          while tokens.first != MN
+          each_response_until_mn do |line, tokens|
             error ||= response_error_from_line(line) if error_response?(tokens.first)
-            line = read_line
-            tokens = line&.split || []
           end
 
           raise error if error
@@ -164,19 +160,25 @@ module Dalli
         def count_not_found_responses_until_mn
           error = nil
           not_found_count = 0
-          line = read_line
-          tokens = line&.split || []
 
-          while tokens.first != MN
+          each_response_until_mn do |line, tokens|
             error ||= response_error_from_line(line) if error_response?(tokens.first)
             not_found_count += 1 if tokens.first == NF
-            line = read_line
-            tokens = line&.split || []
           end
 
           raise error if error
 
           not_found_count
+        end
+
+        def each_response_until_mn
+          loop do
+            line = read_line
+            tokens = line&.split || []
+            break if tokens.first == MN
+
+            yield line, tokens
+          end
         end
 
         def tokens_from_header_buffer(buf)
