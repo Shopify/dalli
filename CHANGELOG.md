@@ -4,6 +4,13 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Ensure fixed-length response reads consume exactly the requested number of
+  bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a
+  single `IO#read(count)`, which returns a short (truncated) buffer when the
+  peer closes the connection partway through a response body. That truncated
+  buffer was surfaced as a valid (decodable-but-wrong) value. Reads now loop
+  until `count` bytes arrive, and a premature EOF raises so the dirty socket is
+  closed/retried instead of reused. (ianks)
 - Add tombstone (mark-stale) support to `Client#delete` / `delete_cas` /
   `delete_multi` via new `:invalidate`, `:tombstone_ttl`, `:drop_value`
   request-option keys (corresponding to meta-protocol `I`, `T`, `x` flags
