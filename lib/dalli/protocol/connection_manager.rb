@@ -168,13 +168,13 @@ module Dalli
       end
 
       def read(count)
-        @sock.read(count)
+        read_bytes(count)
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
         error_on_request!(e)
       end
 
       def read_exact(count)
-        @sock.read(count)
+        read_bytes(count)
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
         error_on_request!(e)
       end
@@ -273,6 +273,22 @@ module Dalli
 
         time = Time.now - @down_at
         Dalli.logger.warn { format('%<name>s is back (downtime was %<time>.3f seconds)', name: name, time: time) }
+      end
+
+      private
+
+      # Reads exactly `count` bytes. IO#read(count) on a blocking socket blocks
+      # until it has `count` bytes, accumulating across TCP chunks internally,
+      # and only hands back a shorter (or nil) buffer when the stream hits EOF.
+      # So a short read means the peer closed mid-response: raise EOFError and
+      # let read/read_exact's existing `rescue EOFError` route it through
+      # error_on_request!, which closes the dirty socket for a retry on a fresh
+      # connection (and preserves the $ERROR_INFO context down! relies on).
+      def read_bytes(count)
+        buffer = @sock.read(count)
+        return buffer if buffer && buffer.bytesize == count
+
+        raise EOFError, "EOF reading #{count} bytes; received #{buffer ? buffer.bytesize : 0}"
       end
     end
   end
