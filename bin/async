@@ -1,0 +1,160 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# This helps benchmark current performance of Dalli
+# comparing sync vs async calls.
+#
+# This microbenchmark doens't show the real value of async as there is no other work occuring while IO is occuring
+# it shows the overhead of async vs sync. It also shows efficiency of async switching duirng IO.
+#
+# In real world async is useful when there is other work occuring and it should reduce latency.
+# For example when using puma, falcon, and async database clients which we have in SFR.
+#
+# * for small payloads on a fast local connection async will be slower, example 50K bytes local is ~20% slower
+# * as time spent on IO increases async will start to look better, and async will start to beat sync
+#   * as we increase payload size async will start to beat sync as there is more time spent on IO
+#   * as we increase latency (memcached over the network (run through toxiproxy to see this locally))
+#
+# run with:
+# bundle exec bin/async
+require 'bundler/inline'
+require 'json'
+
+gemfile do
+  source 'https://rubygems.org'
+  gem 'dalli'
+  gem 'benchmark-ips'
+  gem 'async'
+  gem 'connection_pool'
+end
+
+require 'dalli'
+require 'benchmark/ips'
+require 'async'
+require 'connection_pool'
+
+##
+# StringSerializer is a serializer that avoids the overhead of Marshal or JSON.
+##
+class StringSerializer
+  def self.dump(value)
+    value
+  end
+
+  def self.load(value)
+    value
+  end
+end
+
+BENCH_TIME = (ENV['BENCH_TIME'] || 5).to_i
+BENCH_JOB  = ENV['BENCH_JOB'] || 'set'
+POOL_SIZE = (ENV['POOL_SIZE'] || 10).to_i
+PAYLOAD_SIZE = (ENV['PAYLOAD_SIZE'] || 50_000).to_i
+# setup toxiproxy to run locally, and pass in the port to use
+MEMCACHED_PORT = (ENV['MEMCACHED_PORT'] || 11211).to_i
+TERMINATOR = "\r\n"
+
+memcached_pool = ConnectionPool.new(size: 10, timeout: 1) do
+  Dalli::Client.new("localhost:#{MEMCACHED_PORT}", protocol: :meta, serializer: StringSerializer,compress: false)
+end
+meta_client = Dalli::Client.new("localhost:#{MEMCACHED_PORT}", protocol: :meta, serializer: StringSerializer, compress: false)
+payload_value = 'B' * PAYLOAD_SIZE
+
+puts "benchmarking async with #{POOL_SIZE} connections"
+
+# ensure the clients are all connected and working
+meta_client.set('meta_key', payload_value)
+# ensure we have basic data for the benchmarks and get calls
+pairs = {}
+100.times do |i|
+  pairs["multi_#{i}"] = payload_value
+end
+pairs.each do |key, value|
+  meta_client.set(key, value, 3600, raw: true)
+end
+
+###
+# GC Suite
+# benchmark without GC skewing things
+###
+class GCSuite
+  def warming(*)
+    run_gc
+  end
+
+  def running(*)
+    run_gc
+  end
+
+  def warmup_stats(*); end
+
+  def add_report(*); end
+
+  private
+
+  def run_gc
+    GC.enable
+    GC.start
+    GC.disable
+  end
+end
+suite = GCSuite.new
+
+def get_key(memcached_pool, key)
+	Sync do
+		return memcached_pool.with do |conn|
+      conn.get(key)
+    end
+	end
+end
+
+def async_get_all(memcached_pool, keys)
+	Sync do |parent|
+		keys.map do |key|
+			parent.async do
+				get_key(memcached_pool, key)
+			end
+		end.map(&:wait)
+	end
+end
+
+def async_set_all(memcached_pool, pairs)
+	Sync do |parent|
+		pairs.map do |key, value|
+			parent.async do
+				memcached_pool.with do |conn|
+					conn.set(key, value, 3600, raw: true)
+				end
+			end
+		end.map(&:wait)
+	end
+end
+
+case BENCH_JOB
+when 'get'
+  Benchmark.ips do |x|
+    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
+    x.report('get 100 keys loop') do
+      pairs.keys.map do |key|
+        meta_client.get(key)
+      end
+    end
+    x.report('get 100 keys async') do
+      async_get_all(memcached_pool, pairs.keys)
+    end
+    x.compare!
+  end
+when 'set'
+  Benchmark.ips do |x|
+    x.config(warmup: 2, time: BENCH_TIME, suite: suite)
+    x.report('write 100 keys loop') do
+      pairs.each do |key, value|
+        meta_client.set(key, value, 3600, raw: true)
+      end
+    end
+    x.report('write 100 keys async') do
+      async_set_all(memcached_pool, pairs)
+    end
+    x.compare!
+  end
+end
