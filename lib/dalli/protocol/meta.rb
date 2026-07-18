@@ -82,12 +82,18 @@ module Dalli
           @connection_manager.flush
 
           terminator_length = TERMINATOR.length
+          error = nil
           while (line = @connection_manager.readline)
             break if line == TERMINATOR || line[0, 2] == 'MN'
+
+            tokens = line.split
+            if response_processor.error_response?(tokens.first)
+              error ||= response_processor.response_error_from_line(line.chomp(TERMINATOR))
+              next
+            end
             next unless line[0, 3] == 'VA '
 
             # VA value_length flags key
-            tokens = line.split
             value = @connection_manager.read_exact(tokens[1].to_i)
             bitflags = optimized_for_raw ? 0 : @response_processor.bitflags_from_tokens(tokens)
             @connection_manager.read_exact(terminator_length) # read the terminator
@@ -103,6 +109,8 @@ module Dalli
             attributes['hit_count'] = results.size
             attributes['miss_count'] = keys.size - results.size
           end
+
+          raise error if error
         end
 
         results
@@ -131,11 +139,17 @@ module Dalli
           @connection_manager.flush
 
           terminator_length = TERMINATOR.length
+          error = nil
           while (line = @connection_manager.readline)
             break if line == TERMINATOR || line[0, 2] == 'MN'
-            next unless line[0, 3] == 'VA '
 
             tokens = line.split
+            if response_processor.error_response?(tokens.first)
+              error ||= response_processor.response_error_from_line(line.chomp(TERMINATOR))
+              next
+            end
+            next unless line[0, 3] == 'VA '
+
             value = @connection_manager.read_exact(tokens[1].to_i)
             bitflags = optimized_for_raw ? 0 : response_processor.bitflags_from_tokens(tokens)
             @connection_manager.read_exact(terminator_length)
@@ -167,6 +181,8 @@ module Dalli
             attributes['miss_count'] = keys.size - fresh_hit_count
             attributes['stale_count'] = stale_count
           end
+
+          raise error if error
         end
 
         results

@@ -96,6 +96,7 @@ module Dalli
       # Returns nothing.
       def pipeline_response_setup
         verify_pipelined_state(:getkq)
+        @pipeline_error = nil
         write_noop
         response_buffer.reset
       end
@@ -112,20 +113,20 @@ module Dalli
 
         response_buffer.read
 
-        status, cas, key, value = response_buffer.process_single_getk_response
         # status is not nil only if we have a full response to parse
         # in the buffer
-        until status.nil?
-          # If the status is ok and key is nil, then this is the response
-          # to the noop at the end of the pipeline
-          finish_pipeline && break if status && key.nil?
+        loop do
+          response = response_buffer.process_single_getk_response
+          break if response.first.nil?
 
-          # If the status is ok and the key is not nil, then this is a
-          # getkq response with a value that we want to set in the response hash
-          values[key] = [value, cas] unless key.nil?
+          process_pipeline_getk_response(values, response)
+          break if pipeline_complete?
+        end
 
-          # Get the next response from the buffer
-          status, cas, key, value = response_buffer.process_single_getk_response
+        if pipeline_complete? && @pipeline_error
+          error = @pipeline_error
+          @pipeline_error = nil
+          raise error
         end
 
         values
@@ -138,7 +139,23 @@ module Dalli
       # disconnected, and the exception is swallowed.
       #
       # Returns nothing.
+      def process_pipeline_getk_response(values, response)
+        status, cas, key, value, error = response
+        @pipeline_error ||= error if error
+
+        # If the status is ok and key is nil, then this is the response
+        # to the noop at the end of the pipeline
+        if status && key.nil?
+          finish_pipeline
+        elsif !key.nil?
+          # If the status is ok and the key is not nil, then this is a
+          # getkq response with a value that we want to set in the response hash
+          values[key] = [value, cas]
+        end
+      end
+
       def pipeline_abort
+        @pipeline_error = nil
         response_buffer.clear
         @connection_manager.abort_request!
         return true unless connected?
