@@ -4,6 +4,10 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Change `Client#get_cas` without a block to return a `Dalli::CacheResult`
+  containing `value`, `cas_token`, and the existing status predicates. A miss
+  has `cas_token == 0`; a hit has a positive token. The block form continues
+  yielding `(value, cas_token)`. (drinkbeer)
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a
   single `IO#read(count)`, which returns a short (truncated) buffer when the

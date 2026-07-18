@@ -10,9 +10,62 @@ class ResponseProcessorTestIO
   def read_line
     @lines.shift&.dup
   end
+
+  def read(_size)
+    @lines.shift&.dup
+  end
+end
+
+class ResponseProcessorTestValueMarshaller
+  def retrieve(value, _bitflags)
+    value
+  end
 end
 
 describe Dalli::Protocol::Meta::ResponseProcessor do
+  describe '#meta_get_with_value_and_cas' do
+    it 'returns a stale hit CacheResult with the value and CAS token' do
+      io = ResponseProcessorTestIO.new("VA 5 f0 c42 X\r\n", 'value', "\r\n")
+      marshaller = ResponseProcessorTestValueMarshaller.new
+      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
+
+      result = processor.meta_get_with_value_and_cas
+
+      assert_instance_of Dalli::CacheResult, result
+      assert_equal 'value', result.value
+      assert_equal 42, result.cas_token
+      assert_predicate result, :hit?
+      refute_predicate result, :miss?
+      assert_predicate result, :stale?
+    end
+
+    it 'returns a miss CacheResult with CAS token zero for an EN response' do
+      io = ResponseProcessorTestIO.new("EN\r\n")
+      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+
+      result = processor.meta_get_with_value_and_cas
+
+      assert_instance_of Dalli::CacheResult, result
+      assert_nil result.value
+      assert_equal 0, result.cas_token
+      assert_predicate result, :miss?
+      refute_predicate result, :hit?
+      refute_predicate result, :stale?
+    end
+
+    it 'returns a miss CacheResult with the response CAS token for an HD response' do
+      io = ResponseProcessorTestIO.new("HD c42\r\n")
+      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+
+      result = processor.meta_get_with_value_and_cas
+
+      assert_nil result.value
+      assert_equal 42, result.cas_token
+      assert_predicate result, :miss?
+      refute_predicate result, :hit?
+    end
+  end
+
   it 'includes the full unexpected response line in DalliError messages' do
     # Representative CLIENT_ERROR lines returned by memcached. The response
     # processor treats each as an unexpected response code, but should preserve
