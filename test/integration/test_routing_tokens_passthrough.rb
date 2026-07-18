@@ -159,20 +159,17 @@ describe 'routing tokens (p_token / l_token) passthrough' do
   end
 
   describe 'get_cas' do
-    it 'accepts routing tokens and returns [value, cas] (return shape unchanged)' do
+    it 'accepts routing tokens and returns a CacheResult' do
       memcached_persistent do |dc|
         dc.flush
         dc.set('rtk', 'val')
 
         result = dc.get_cas('rtk', ROUTING_OPTS)
 
-        assert_kind_of Array, result
-        assert_equal 2, result.length
-        value, cas = result
-
-        assert_equal 'val', value
-        assert_kind_of Integer, cas
-        refute_equal 0, cas
+        assert_instance_of Dalli::CacheResult, result
+        assert_equal 'val', result.value
+        assert_kind_of Integer, result.cas_token
+        refute_equal 0, result.cas_token
       end
     end
 

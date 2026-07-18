@@ -5,15 +5,20 @@ require_relative '../helper'
 describe 'CAS behavior' do
   describe 'get_cas' do
     describe 'when no block is given' do
-      it 'returns the value and a CAS' do
+      it 'returns a hit CacheResult with the value and CAS token' do
         memcached_persistent do |dc|
           dc.flush
 
           dc.set('key1', 'abcd')
-          value, cas = dc.get_cas('key1')
+          result = dc.get_cas('key1')
 
-          assert_equal 'abcd', value
-          assert valid_cas?(cas)
+          assert_instance_of Dalli::CacheResult, result
+          assert_equal 'abcd', result.value
+          assert valid_cas?(result.cas_token)
+          assert_predicate result, :hit?
+          refute_predicate result, :miss?
+          refute_predicate result, :stale?
+          assert_predicate result, :frozen?
         end
       end
 
@@ -24,20 +29,72 @@ describe 'CAS behavior' do
           dc.flush
 
           dc.set('key1', 'Not found')
-          value, cas = dc.get_cas('key1')
+          result = dc.get_cas('key1')
 
-          assert_equal 'Not found', value
-          assert valid_cas?(cas)
+          assert_equal 'Not found', result.value
+          assert valid_cas?(result.cas_token)
+          assert_predicate result, :hit?
         end
       end
 
-      it 'returns [nil, 0] on a miss' do
+      it 'returns a miss CacheResult with CAS token zero when the key is absent' do
         memcached_persistent do |dc|
           dc.flush
-          value, cas = dc.get_cas('key1')
+          result = dc.get_cas('key1')
 
-          assert_nil value
-          assert_equal 0, cas
+          assert_instance_of Dalli::CacheResult, result
+          assert_nil result.value
+          assert_equal 0, result.cas_token
+          assert_predicate result, :miss?
+          refute_predicate result, :hit?
+          refute_predicate result, :stale?
+        end
+      end
+
+      it 'returns a hit CacheResult with a positive CAS token for a cached nil' do
+        memcached_persistent do |dc|
+          dc.flush
+
+          dc.set('key1', nil)
+          result = dc.get_cas('key1')
+
+          assert_nil result.value
+          assert valid_cas?(result.cas_token)
+          assert_predicate result, :hit?
+          refute_predicate result, :miss?
+        end
+      end
+
+      it 'returns a stale CacheResult with a positive CAS token for a tombstone' do
+        memcached_persistent do |dc|
+          dc.flush
+
+          dc.set('key1', 'stale-value')
+          dc.delete('key1', invalidate: true, tombstone_ttl: 30)
+          result = dc.get_cas('key1')
+
+          assert_equal 'stale-value', result.value
+          assert valid_cas?(result.cas_token)
+          assert_predicate result, :hit?
+          refute_predicate result, :miss?
+          assert_predicate result, :stale?
+        end
+      end
+
+      it 'returns the same CAS token until the value changes' do
+        memcached_persistent do |dc|
+          dc.flush
+
+          dc.set('key1', 'first-value')
+          first_result = dc.get_cas('key1')
+          second_result = dc.get_cas('key1')
+
+          assert_equal first_result.cas_token, second_result.cas_token
+
+          dc.set('key1', 'second-value')
+          third_result = dc.get_cas('key1')
+
+          refute_equal first_result.cas_token, third_result.cas_token
         end
       end
     end
@@ -197,16 +254,16 @@ describe 'CAS behavior' do
         expected = { 'blah' => 'blerg!' }
         dc.set('some_key', expected)
 
-        value, cas = dc.get_cas('some_key')
+        result = dc.get_cas('some_key')
 
-        assert_equal value, expected
-        assert(!cas.nil? && cas != 0)
+        assert_equal expected, result.value
+        assert valid_cas?(result.cas_token)
 
         # Set operation, first with wrong then with correct CAS
         expected = { 'blah' => 'set succeeded' }
 
-        refute(dc.set_cas('some_key', expected, cas + 1))
-        assert op_addset_succeeds(cas = dc.set_cas('some_key', expected, cas))
+        refute(dc.set_cas('some_key', expected, result.cas_token + 1))
+        assert op_addset_succeeds(cas = dc.set_cas('some_key', expected, result.cas_token))
 
         # Replace operation, first with wrong then with correct CAS
         expected = { 'blah' => 'replace succeeded' }

@@ -81,16 +81,17 @@ module Dalli
     end
 
     ##
-    # Get the value and CAS ID associated with the key.  If a block is provided,
-    # value and CAS will be passed to the block.
+    # Get the value and CAS ID associated with the key. Without a block, returns
+    # a Dalli::CacheResult containing the value, status predicates, and CAS token.
+    # If a block is provided, value and CAS will be passed to the block.
     #
     # `req_options` is forwarded to the underlying meta-protocol read so that
     # transport-level options (e.g. `:p_token` / `:l_token`) are applied.
     def get_cas(key, req_options = nil)
-      (value, cas) = perform(:cas, key, req_options)
-      return [value, cas] unless block_given?
+      result = perform(:cas, key, req_options)
+      return result unless block_given?
 
-      yield value, cas
+      yield result.value, result.cas_token
     end
 
     ##
@@ -509,11 +510,12 @@ module Dalli
     end
 
     def cas_core(key, always_set, ttl = nil, req_options = nil)
-      (value, cas) = perform(:cas, key, req_options)
+      result = perform(:cas, key, req_options)
+      value = result.value
       return if value.nil? && !always_set
 
       newvalue = yield(value)
-      perform(:set, key, newvalue, ttl_or_default(ttl), cas, req_options)
+      perform(:set, key, newvalue, ttl_or_default(ttl), result.cas_token, req_options)
     end
 
     ##

@@ -42,12 +42,13 @@ module Dalli
 
         def meta_get_with_value_and_cas
           tokens = error_on_unexpected!([VA, EN, HD])
-          return [nil, 0] if tokens.first == EN
+          return ::Dalli::CacheResult.new(value: nil, miss: true, cas_token: 0) if tokens.first == EN
 
           cas = cas_from_tokens(tokens)
-          return [nil, cas] unless tokens.first == VA
+          return ::Dalli::CacheResult.new(value: nil, miss: true, cas_token: cas) unless tokens.first == VA
 
-          [@value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens)), cas]
+          value = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
+          ::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens), cas_token: cas)
         end
 
         def meta_get_with_value_and_meta_flags(cache_nils: false)

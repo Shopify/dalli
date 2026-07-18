@@ -27,6 +27,7 @@ describe 'tombstone (mark-stale) support' do
         assert_predicate result, :hit?
         refute_predicate result, :miss?
         refute_predicate result, :stale?
+        assert_nil result.cas_token
       end
     end
 
@@ -298,7 +299,7 @@ describe 'tombstone (mark-stale) support' do
       memcached_persistent do |dc|
         dc.flush
         dc.set('tk', 'val')
-        cas = dc.get_cas('tk').last
+        cas = dc.get_cas('tk').cas_token
 
         dc.delete_cas('tk', cas, invalidate: true, tombstone_ttl: 30)
 
