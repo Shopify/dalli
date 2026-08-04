@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'forwardable'
+require 'securerandom'
 require 'socket'
 require 'timeout'
 
@@ -315,6 +316,10 @@ module Dalli
 
       def reconnect_on_pipeline_complete!
         @connection_manager.reconnect! 'pipelined get has completed' if pipeline_complete?
+      end
+
+      def request_opaque
+        SecureRandom.urlsafe_base64(8, false)
       end
 
       def log_marshal_err(key, err)
