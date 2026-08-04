@@ -10,9 +10,61 @@ class ResponseProcessorTestIO
   def read_line
     @lines.shift&.dup
   end
+
+  def read(_length)
+    @lines.shift&.dup
+  end
 end
 
 describe Dalli::Protocol::Meta::ResponseProcessor do
+  it 'returns misses when value-bearing get responses contain the wrong opaque token' do
+    response_cases = [
+      [:meta_get_with_value, {}, nil],
+      [:meta_get_with_value_and_cas, {}, [nil, 0]],
+      [:meta_get_with_value_and_meta_flags, {}, [nil, {}]],
+      [:meta_get_with_status, {}, [Dalli::CacheResult.new(value: nil, miss: true), 0]]
+    ]
+
+    marshaller = Object.new
+    def marshaller.retrieve(*)
+      raise 'a rejected value must not be deserialized'
+    end
+
+    response_cases.each do |method_name, options, expected|
+      io = ResponseProcessorTestIO.new("VA 5 f0 Owrong-token\r\n", 'value', "\r\n")
+      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
+
+      result = processor.public_send(method_name, **options, expected_opaque: 'expected-token')
+
+      if method_name == :meta_get_with_status
+        assert_predicate result.first, :miss?
+        assert_equal 0, result.last
+      else
+        assert_equal expected, result
+      end
+
+      assert_nil io.read(1), 'the rejected response body should still be consumed'
+    end
+  end
+
+  it 'returns a miss when a bodyless get response contains the wrong opaque token' do
+    io = ResponseProcessorTestIO.new("HD Owrong-token\r\n")
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+
+    assert_nil processor.meta_get_without_value(expected_opaque: 'expected-token')
+  end
+
+  it 'accepts a get response containing the expected opaque token' do
+    marshaller = Object.new
+    def marshaller.retrieve(value, _flags)
+      value
+    end
+    io = ResponseProcessorTestIO.new("VA 5 f0 Oexpected-token\r\n", 'value', "\r\n")
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
+
+    assert_equal 'value', processor.meta_get_with_value(expected_opaque: 'expected-token')
+  end
+
   it 'includes the full unexpected response line in DalliError messages' do
     # Representative CLIENT_ERROR lines returned by memcached. The response
     # processor treats each as an unexpected response code, but should preserve

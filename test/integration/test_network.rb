@@ -79,7 +79,9 @@ describe 'Network' do
           conn = tcp_server.accept
           Thread.new(conn) do |c|
             while (line = c.gets("\r\n"))
-              cmd, key = line.split
+              cmd, _key, *flags = line.split
+              opaque = flags.find { |flag| flag.start_with?('O') }
+              response_flags = opaque ? " #{opaque}" : ''
               case cmd
               when 'version'
                 c.write("VERSION 1.6.39-fake\r\n")
@@ -87,12 +89,12 @@ describe 'Network' do
                 nth = get_count_mutex.synchronize { get_count += 1 }
                 if nth == 1
                   # Correct header + length, only part of the body, then EOF.
-                  c.write("VA #{value.bytesize} k#{key}\r\n")
+                  c.write("VA #{value.bytesize}#{response_flags}\r\n")
                   c.write(value[0, value.bytesize - 16])
                   c.close
                   break
                 else
-                  c.write("VA #{value.bytesize} k#{key}\r\n#{value}\r\n")
+                  c.write("VA #{value.bytesize}#{response_flags}\r\n#{value}\r\n")
                 end
               else
                 c.write("ERROR\r\n")

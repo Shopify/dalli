@@ -210,22 +210,29 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = request_opaque
         fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
           if fast_path
-            write("mg #{encoded_key} v\r\n")
+            write("mg #{encoded_key} v O#{opaque}\r\n")
           else
-            write(RequestFormatter.meta_get(key: encoded_key, base64: base64,
+            write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, base64: base64,
                                             meta_flags: meta_options, **routing_kwargs))
           end
           @connection_manager.flush
           result = if fast_path
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+                     response_processor.meta_get_with_value(
+                       cache_nils: cache_nils?(options), skip_flags: true, expected_opaque: opaque
+                     )
                    elsif meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -253,13 +260,14 @@ module Dalli
       def get_with_status(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = request_opaque
 
         @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
-          req = RequestFormatter.meta_get(key: encoded_key, value: true, base64: base64,
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, base64: base64,
                                           **routing_kwargs)
           write(req)
           @connection_manager.flush
-          result, raw_value_bytesize = response_processor.meta_get_with_status
+          result, raw_value_bytesize = response_processor.meta_get_with_status(expected_opaque: opaque)
           unless attributes.frozen?
             # Stale tombstones are CacheResult#hit? at the API layer, but
             # count as non-fresh for hit-rate metrics.
@@ -273,22 +281,25 @@ module Dalli
         end
       end
 
-      # rubocop:disable Metrics/AbcSize
+      # rubocop:disable-next Metrics/AbcSize
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = request_opaque
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
-          req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
-                                          meta_flags: meta_options, **routing_kwargs)
-          write(req)
+          write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, base64: base64,
+                                          meta_flags: meta_options, **routing_kwargs))
           @connection_manager.flush
           result = if meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options),
+                                                            expected_opaque: opaque)
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -299,17 +310,17 @@ module Dalli
           result
         end
       end
-      # rubocop:enable Metrics/AbcSize
 
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        opaque = request_opaque
 
         @middlewares_stack.retrieve_req('memcached.touch', { 'keys' => key, 'ttl' => ttl }) do
-          req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_without_value
+          response_processor.meta_get_without_value(expected_opaque: opaque)
         end
       end
 
@@ -318,13 +329,14 @@ module Dalli
       def cas(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = request_opaque
 
         @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
-          req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64,
-                                          **routing_kwargs)
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, return_cas: true,
+                                          base64: base64, **routing_kwargs)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_with_value_and_cas
+          response_processor.meta_get_with_value_and_cas(expected_opaque: opaque)
         end
       end
 
@@ -341,7 +353,7 @@ module Dalli
         do_storage_req(:replace, key, value, ttl, cas, options)
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def do_storage_req(mode, key, raw_value, ttl = nil, cas = nil, options = {})
         (value, bitflags) = @value_marshaller.store(key, raw_value, options)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
@@ -369,7 +381,6 @@ module Dalli
           response_processor.meta_set_with_cas unless quiet?
         end
       end
-      # rubocop:enable Metrics/ParameterLists
 
       def append(key, value, options = nil)
         @middlewares_stack.storage_req('memcached.append', { 'keys' => key, 'value_size' => value.bytesize }) do
@@ -385,7 +396,7 @@ module Dalli
         end
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -397,7 +408,6 @@ module Dalli
         write(TERMINATOR)
         @connection_manager.flush
       end
-      # rubocop:enable Metrics/ParameterLists
 
       # Delete Commands
       def delete(key, cas, options = nil)
@@ -422,7 +432,7 @@ module Dalli
         decr_incr true, key, count, ttl, initial, options
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def decr_incr(incr, key, delta, ttl, initial, options = nil)
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -443,7 +453,6 @@ module Dalli
           response_processor.decr_incr unless quiet?
         end
       end
-      # rubocop:enable Metrics/ParameterLists
 
       # Other Commands
       def flush(delay = 0)
