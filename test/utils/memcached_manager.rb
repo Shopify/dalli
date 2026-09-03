@@ -5,7 +5,7 @@ require 'tempfile'
 # Utility module for spinning up memcached instances locally, and generating a corresponding
 # Dalli::Client to access the local instance.  Supports access via TCP and UNIX domain socket.
 ##
-# rubocop:disable Metrics/ModuleLength
+# rubocop:disable-next Metrics/ModuleLength
 module MemcachedManager
   # TODO: This is all UNIX specific.  To support
   # running CI on Windows we'll need to conditionally
@@ -145,4 +145,3 @@ module MemcachedManager
     raise Errno::ENOENT, "Unable to find memcached #{MEMCACHED_MIN_MAJOR_VERSION}+ locally"
   end
 end
-# rubocop:enable Metrics/ModuleLength

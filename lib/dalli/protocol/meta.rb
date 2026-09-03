@@ -281,7 +281,7 @@ module Dalli
         end
       end
 
-      # rubocop:disable Metrics/AbcSize
+      # rubocop:disable-next Metrics/AbcSize
       def gat(key, ttl, options = nil)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -310,7 +310,6 @@ module Dalli
           result
         end
       end
-      # rubocop:enable Metrics/AbcSize
 
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
@@ -354,7 +353,7 @@ module Dalli
         do_storage_req(:replace, key, value, ttl, cas, options)
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def do_storage_req(mode, key, raw_value, ttl = nil, cas = nil, options = {})
         (value, bitflags) = @value_marshaller.store(key, raw_value, options)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
@@ -382,7 +381,6 @@ module Dalli
           response_processor.meta_set_with_cas unless quiet?
         end
       end
-      # rubocop:enable Metrics/ParameterLists
 
       def append(key, value, options = nil)
         @middlewares_stack.storage_req('memcached.append', { 'keys' => key, 'value_size' => value.bytesize }) do
@@ -398,7 +396,7 @@ module Dalli
         end
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, options = {})
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -410,7 +408,6 @@ module Dalli
         write(TERMINATOR)
         @connection_manager.flush
       end
-      # rubocop:enable Metrics/ParameterLists
 
       # Delete Commands
       def delete(key, cas, options = nil)
@@ -435,7 +432,7 @@ module Dalli
         decr_incr true, key, count, ttl, initial, options
       end
 
-      # rubocop:disable Metrics/ParameterLists
+      # rubocop:disable-next Metrics/ParameterLists
       def decr_incr(incr, key, delta, ttl, initial, options = nil)
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
@@ -456,7 +453,6 @@ module Dalli
           response_processor.decr_incr unless quiet?
         end
       end
-      # rubocop:enable Metrics/ParameterLists
 
       # Other Commands
       def flush(delay = 0)
