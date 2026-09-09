@@ -44,10 +44,22 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                    )
     end
 
-    it 'replaces a caller-provided opaque meta flag with the correlation token' do
-      assert_equal "mg #{key} v f Xfoo O#{opaque}\r\n",
+    it 'rejects caller-provided opaque meta flags rather than silently replacing them' do
+      ['Ocaller', :Ocaller, 'O'].each do |flag|
+        flags = ['t', flag].freeze
+        error = assert_raises(ArgumentError) do
+          Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: opaque, meta_flags: flags)
+        end
+
+        assert_includes error.message, 'opaque is reserved for single-get response correlation'
+        assert_equal ['t', flag], flags
+      end
+    end
+
+    it 'preserves caller opaque flags when no internal correlation token is supplied' do
+      assert_equal "mg #{key} v f Ocaller k q s\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, meta_flags: %w[Xfoo Ocaller]
+                     key: key, quiet: true, meta_flags: ['Ocaller']
                    )
     end
 

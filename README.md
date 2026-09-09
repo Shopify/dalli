@@ -25,6 +25,39 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 * [Forum](https://github.com/petergoldstein/dalli/discussions/categories/q-a) - If you have questions about Dalli, please post them here.
 * [Client API](https://www.rubydoc.info/gems/dalli) - Ruby documentation for the `Dalli::Client` API
 
+## Single-get response correlation
+
+Single-key meta gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`)
+include an internally generated `O` opaque token. Memcached and any intermediary
+must echo the token on value-bearing (`VA`) responses. A wrong token on any get
+response, or a missing token on a `VA` response, is a stream-correlation failure:
+Dalli returns the operation's normal cache-miss result and closes the connection
+without reading or deserializing the body. The rejected operation is **not
+retried**, and its existing metrics record a miss rather than an error.
+
+Correlation failures log a warning and share failure accounting with network
+errors. With the default `socket_max_failures: 2`, two consecutive failed
+operations mark the server down for `down_retry_delay`. Even the operation that
+reaches this limit returns its miss; subsequent requests use the normal
+server-availability/failover behavior. A successful response resets the failure
+budget, but a reconnect/version handshake alone does not.
+
+For compatibility with peers that omit the token on bodyless responses, an
+`EN` or `HD` response **without** an `O` flag is treated as a normal cache miss
+without closing the connection. This includes `touch`, which returns `nil`
+rather than accepting an uncorrelated hit. An explicitly wrong (including empty)
+opaque is still an error. This compatibility exception does not establish
+correlation for bodyless responses.
+
+The `O` flag is reserved for internal correlation on single gets. Passing an
+`O...` flag in `meta_flags` to `get` or `gat` raises `ArgumentError` rather than
+silently replacing the caller's token. Routing tokens (`p_token` and `l_token`)
+remain supported. Multi-get/pipeline request formatting and response matching
+are unchanged; opaque correlation applies only to single gets.
+
+Correlation detects response mix-ups, not incorrect data already stored under a
+key or a wrong body attached to an otherwise correctly correlated header.
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. You can run `bin/console` for an interactive prompt that will allow you to experiment.
