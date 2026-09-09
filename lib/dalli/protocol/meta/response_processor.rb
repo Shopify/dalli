@@ -281,7 +281,10 @@ module Dalli
         def valid_response_opaque?(tokens, expected_opaque)
           return true if expected_opaque.nil? || opaque_from_tokens(tokens) == expected_opaque
 
-          read_data(tokens[1].to_i) if tokens.first == VA
+          # Draining this frame would not prove request/response alignment:
+          # the expected response may still be queued behind the rejected one.
+          # Discard the connection instead, without reading or decoding its body.
+          @io_source.discard_after_request!
           false
         end
 

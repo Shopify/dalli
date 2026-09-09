@@ -42,6 +42,56 @@ describe Dalli::Protocol::ConnectionManager do
     manager
   end
 
+  it 'keeps the socket open after an ordinary completed request' do
+    socket = ContractReadSocket.new
+    manager = connection_manager_with_socket(socket)
+    manager.start_request!
+    manager.finish_request!
+
+    refute_predicate manager, :request_in_progress?
+    assert_predicate manager, :connected?
+    refute_predicate socket, :closed?
+  end
+
+  it 'discards a rejected response connection when the request completes, without retrying' do
+    socket = ContractReadSocket.new
+    manager = connection_manager_with_socket(socket)
+    manager.start_request!
+    manager.discard_after_request!
+
+    assert_predicate manager, :request_in_progress?
+    refute_predicate socket, :closed?
+
+    manager.finish_request!
+
+    assert_predicate socket, :closed?
+    refute_predicate manager, :connected?
+    refute_predicate manager, :request_in_progress?
+    assert_empty socket.read_calls
+
+    replacement = ContractReadSocket.new
+    manager.instance_variable_set(:@sock, replacement)
+    manager.start_request!
+    manager.finish_request!
+
+    refute_predicate replacement, :closed?, 'discard state must not leak to the next connection'
+  end
+
+  it 'clears pending discard state when a request is closed before completing' do
+    manager = connection_manager_with_socket(ContractReadSocket.new)
+    manager.start_request!
+    manager.discard_after_request!
+    manager.close
+
+    replacement = ContractReadSocket.new
+    manager.instance_variable_set(:@sock, replacement)
+    manager.start_request!
+    manager.finish_request!
+
+    refute_predicate replacement, :closed?
+    refute_predicate manager, :request_in_progress?
+  end
+
   it 'returns the full buffer from a single read, binary-safe' do
     socket = ContractReadSocket.new("a\x00\xFFz".b)
     manager = connection_manager_with_socket(socket)

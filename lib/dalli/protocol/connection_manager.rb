@@ -35,6 +35,7 @@ module Dalli
         @socket_type = socket_type
         @options = DEFAULTS.merge(client_options)
         @request_in_progress = false
+        @discard_after_request = false
         @sock = nil
         @pid = nil
 
@@ -147,10 +148,19 @@ module Dalli
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
+        close if @discard_after_request
+      end
+
+      # A rejected response may leave more responses queued on the socket.
+      # Defer closing until the request completes so its normal miss result can
+      # be returned without aborting finish_request!'s lifecycle bookkeeping.
+      def discard_after_request!
+        @discard_after_request = true
       end
 
       def abort_request!
         @request_in_progress = false
+        @discard_after_request = false
       end
 
       def readline
