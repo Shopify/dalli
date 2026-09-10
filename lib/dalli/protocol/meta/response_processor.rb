@@ -30,7 +30,7 @@ module Dalli
 
         def meta_get_with_value(cache_nils: false, skip_flags: false, expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return get_miss(cache_nils) unless valid_response_opaque?(tokens, expected_opaque)
+          return get_miss(cache_nils) unless verify_opaque!(tokens, expected_opaque)
           return get_miss(cache_nils) if tokens.first == EN
           return true unless tokens.first == VA
 
@@ -43,7 +43,7 @@ module Dalli
 
         def meta_get_with_value_and_cas(expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return cas_miss unless valid_response_opaque?(tokens, expected_opaque)
+          return cas_miss unless verify_opaque!(tokens, expected_opaque)
           return cas_miss if tokens.first == EN
 
           cas = cas_from_tokens(tokens)
@@ -54,7 +54,7 @@ module Dalli
 
         def meta_get_with_value_and_meta_flags(cache_nils: false, expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return meta_flags_miss(cache_nils) unless valid_response_opaque?(tokens, expected_opaque)
+          return meta_flags_miss(cache_nils) unless verify_opaque!(tokens, expected_opaque)
           return meta_flags_miss(cache_nils) if tokens.first == EN
 
           meta_flags = meta_flags_from_tokens(tokens)
@@ -67,7 +67,7 @@ module Dalli
 
         def meta_get_without_value(expected_opaque: nil)
           tokens = error_on_unexpected!([EN, HD])
-          return nil unless valid_response_opaque?(tokens, expected_opaque)
+          return nil unless verify_opaque!(tokens, expected_opaque)
 
           tokens.first == EN ? nil : true
         end
@@ -80,7 +80,7 @@ module Dalli
         # predicates rather than nil-ness.
         def meta_get_with_status(expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return status_miss unless valid_response_opaque?(tokens, expected_opaque)
+          return status_miss unless verify_opaque!(tokens, expected_opaque)
           return status_miss if tokens.first == EN
 
           if tokens.first == VA
@@ -275,16 +275,34 @@ module Dalli
         end
 
         def opaque_from_tokens(tokens)
-          value_from_tokens(tokens, 'O')
+          tokens.find { |token| token.start_with?('O') }&.slice(1..)
         end
 
-        def valid_response_opaque?(tokens, expected_opaque)
-          return true if expected_opaque.nil? || opaque_from_tokens(tokens) == expected_opaque
+        def body_len_from_tokens(tokens)
+          value_from_tokens(tokens, 's')&.to_i
+        end
 
-          # Draining this frame would not prove request/response alignment:
-          # the expected response may still be queued behind the rejected one.
-          # Discard the connection instead, without reading or decoding its body.
-          @io_source.discard_after_request!
+        def value_from_tokens(tokens, flag)
+          bitflags_token = tokens.find { |t| t.start_with?(flag) }
+          return 0 unless bitflags_token
+
+          bitflags_token[1..]
+        end
+
+        # Uncorrelated responses return the operation's normal miss result.
+        # Do not retry a correlation failure: account for it and discard the
+        # connection without reading or deserializing the rejected body.
+        def verify_opaque!(tokens, expected_opaque)
+          return true if expected_opaque.nil?
+
+          opaque = opaque_from_tokens(tokens)
+          return true if opaque == expected_opaque
+          # Some peers omit O on bodyless responses. Treat both EN and HD as
+          # misses in that case; never accept an uncorrelated value or touch hit.
+          return false if opaque.nil? && [EN, HD].include?(tokens.first)
+
+          reason = opaque.nil? ? 'missing opaque' : 'opaque mismatch'
+          @io_source.discard_after_request!("Response correlation error: #{reason} (#{tokens.first})")
           false
         end
 
@@ -302,17 +320,6 @@ module Dalli
 
         def status_miss
           [::Dalli::CacheResult.new(value: nil, miss: true), 0]
-        end
-
-        def body_len_from_tokens(tokens)
-          value_from_tokens(tokens, 's')&.to_i
-        end
-
-        def value_from_tokens(tokens, flag)
-          bitflags_token = tokens.find { |t| t.start_with?(flag) }
-          return 0 unless bitflags_token
-
-          bitflags_token[1..]
         end
 
         def read_line

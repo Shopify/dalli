@@ -77,18 +77,17 @@ module Dalli
 
       def up!
         log_up_detected
-        reset_down_info
+        # A successful reconnect/version handshake does not prove the failed
+        # operation will work. Preserve its failure budget across reconnects, but
+        # allow a fresh budget when probing a server after down_retry_delay.
+        reset_down_info(reset_failures: !@last_down_at.nil?)
       end
 
       # Marks the server instance as down.  Updates the down_at state
       # and raises an Dalli::NetworkError that includes the underlying
       # error in the message.  Calls close to clean up socket state
       def down!
-        close
-        log_down_detected
-
-        @error = $ERROR_INFO&.class&.name
-        @msg ||= $ERROR_INFO&.message
+        mark_down!
         raise_down_error
       end
 
@@ -148,16 +147,21 @@ module Dalli
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
-        close if @discard_after_request
+        if @discard_after_request
+          @fail_count >= max_allowed_failures ? mark_down! : close
+        else
+          @fail_count = 0
+        end
       end
 
-      # A rejected response may leave more responses queued on the socket.
-      # Defer closing until the request completes so its normal miss result can
-      # be returned without aborting finish_request!'s lifecycle bookkeeping.
-      def discard_after_request!
+      # Correlation failures are cache misses, not retryable operations. Share
+      # failure accounting with network errors, but defer connection cleanup
+      # until completion so even the request that marks the server down can
+      # return its miss rather than raising or retrying.
+      def discard_after_request!(reason)
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
-        Dalli.logger.warn { "#{name} response failed request correlation; discarding connection after request" }
+        record_failure!(reason)
         @discard_after_request = true
       end
 
@@ -215,9 +219,7 @@ module Dalli
       end
 
       def error_on_request!(err_or_string)
-        log_warn_message(err_or_string)
-
-        @fail_count += 1
+        record_failure!(err_or_string)
         if @fail_count >= max_allowed_failures
           down!
         else
@@ -233,8 +235,8 @@ module Dalli
         raise Dalli::RetryableNetworkError, message
       end
 
-      def reset_down_info
-        @fail_count = 0
+      def reset_down_info(reset_failures: true)
+        @fail_count = 0 if reset_failures
         @down_at = nil
         @last_down_at = nil
         @msg = nil
@@ -289,6 +291,19 @@ module Dalli
       end
 
       private
+
+      def record_failure!(err_or_string)
+        log_warn_message(err_or_string)
+        @msg = err_or_string.to_s
+        @fail_count += 1
+      end
+
+      def mark_down!
+        close
+        @error = $ERROR_INFO&.class&.name
+        @msg ||= $ERROR_INFO&.message
+        log_down_detected
+      end
 
       # Reads exactly `count` bytes. IO#read(count) on a blocking socket blocks
       # until it has `count` bytes, accumulating across TCP chunks internally,

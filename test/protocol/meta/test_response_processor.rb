@@ -4,12 +4,12 @@ require_relative '../../helper'
 require 'stringio'
 
 class ResponseProcessorTestIO
-  attr_reader :read_calls, :discard_after_request
+  attr_reader :read_calls, :errors
 
   def initialize(*chunks)
     @io = StringIO.new(chunks.join)
     @read_calls = []
-    @discard_after_request = false
+    @errors = []
   end
 
   def read_line
@@ -21,16 +21,16 @@ class ResponseProcessorTestIO
     @io.read(length)
   end
 
-  def discard_after_request!
-    @discard_after_request = true
+  def discard_after_request!(message)
+    @errors << message
   end
 end
 
 describe Dalli::Protocol::Meta::ResponseProcessor do
   response_codes = %w[VA EN HD]
-  [' Owrong-token', ''].each do |opaque_flag|
+  [' Owrong-token', ' O', ''].each do |opaque_flag|
     response_codes.each do |code|
-      it "returns misses and discards the connection for #{code} with opaque #{opaque_flag.inspect}" do
+      it "checks #{code} responses with opaque #{opaque_flag.inspect} before reading a body" do
         response_cases = [
           [:meta_get_with_value, {}, nil],
           [:meta_get_with_value, { skip_flags: true }, nil],
@@ -49,7 +49,6 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
           processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
 
           result = processor.public_send(method_name, **options, expected_opaque: 'expected-token')
-
           if method_name == :meta_get_with_status
             assert_predicate result.first, :miss?
             assert_equal 0, result.last
@@ -59,11 +58,34 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
             assert_equal expected, result
           end
 
-          assert io.discard_after_request, 'the rejected connection must be discarded'
-          assert_empty io.read_calls, 'a rejected body must not be read or deserialized'
+          if opaque_flag.empty? && code != 'VA'
+            assert_empty io.errors, 'a bodyless response without O is a normal miss'
+          else
+            reason = opaque_flag.empty? ? 'missing opaque' : 'opaque mismatch'
+
+            assert_equal ["Response correlation error: #{reason} (#{code})"], io.errors
+          end
+
+          assert_empty io.read_calls, 'an uncorrelated body must not be read or deserialized'
         end
       end
     end
+  end
+
+  it 'extracts opaque strings and returns nil only when the flag is absent' do
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(nil, nil)
+
+    assert_nil processor.opaque_from_tokens(%w[EN])
+    assert_equal '', processor.opaque_from_tokens(%w[EN O])
+    assert_equal 'token', processor.opaque_from_tokens(%w[VA 5 f0 Otoken])
+  end
+
+  it 'preserves processor behavior when no expected opaque is supplied' do
+    io = ResponseProcessorTestIO.new("HD\r\n")
+    processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+
+    assert processor.meta_get_without_value
+    assert_empty io.errors
   end
 
   it 'accepts a get response containing the expected opaque token' do
@@ -75,7 +97,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
     processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
 
     assert_equal 'value', processor.meta_get_with_value(expected_opaque: 'expected-token')
-    refute io.discard_after_request
+    assert_empty io.errors
     assert_equal [5, 2], io.read_calls
   end
 
@@ -88,7 +110,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
 
       code == 'EN' ? assert_nil(result) : assert(result)
 
-      refute io.discard_after_request
+      assert_empty io.errors
     end
   end
 
