@@ -4,16 +4,12 @@ Dalli Changelog
 Unreleased
 ==========
 
-- Validate single-key meta-get responses with short opaque tokens. Wrong tokens
-  and value responses missing a token return misses without retrying, close the
-  connection, and share warning/failure/down accounting with network errors.
-  Bodyless responses without a token remain reusable misses for compatibility.
-  Caller-supplied `O` meta flags on single gets now raise `ArgumentError`.
-  Multi-get/pipeline formatting and response matching are unchanged. (mrattle)
-- Preserve consecutive stream-failure counts across reconnect/version handshakes
-  so `socket_max_failures` bounds retries and repeated correlation failures;
-  reset the budget after a successful request or when probing a down server
-  after its retry delay. (mrattle)
+- Correlate single gets with connection-local random opaques; mismatches return misses
+  and log warnings, closing the connection without retrying or marking the server down. (mrattle)
+- Require memcached 1.6+ and matching opaques on `VA`/`EN`/`HD`; reject caller `O` flags.
+  Existing reconnect reset behavior and multi-get/pipeline behavior are unchanged. (mrattle)
+- Add request opaques to traces and searchable mismatch warnings with expected/received tokens;
+  mismatch trace attributes preserve normal cache-miss status. (mrattle)
 
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a

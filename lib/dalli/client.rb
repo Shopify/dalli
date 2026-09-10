@@ -2,7 +2,6 @@
 
 require 'digest/md5'
 
-# encoding: ascii
 module Dalli
   ##
   # Dalli::Client is the main class which developers will use to interact with

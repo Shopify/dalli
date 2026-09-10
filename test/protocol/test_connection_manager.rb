@@ -8,6 +8,7 @@ require_relative '../helper'
 # can exercise the full read and the premature-EOF cases without a real socket.
 class ContractReadSocket
   attr_reader :read_calls
+  attr_accessor :sync
 
   def initialize(*chunks)
     @chunks = chunks
@@ -42,22 +43,61 @@ describe Dalli::Protocol::ConnectionManager do
     manager
   end
 
-  it 'keeps the socket open after an ordinary completed request' do
+  it 'seeds one connection-local generator and uses it for compact request opaques' do
     socket = ContractReadSocket.new
     manager = connection_manager_with_socket(socket)
-    manager.start_request!
-    manager.finish_request!
+    random = Random.new(123)
+    expected = random.dup
+    Random.stub(:new, random) do
+      manager.stub(:memcached_socket, socket) { manager.establish_connection }
+    end
 
-    refute_predicate manager, :request_in_progress?
-    assert_predicate manager, :connected?
-    refute_predicate socket, :closed?
+    tokens = Random.stub(:new, -> { raise 'must not reseed per request' }) do
+      Array.new(100) { manager.generate_opaque }
+    end
+
+    assert_equal Array.new(100) { expected.urlsafe_base64(8, false) }, tokens
+    assert_equal 100, tokens.uniq.size
+    assert(tokens.all? { |token| /\A[A-Za-z0-9_-]{11}\z/.match?(token) })
   end
 
-  it 'shares failure accounting between discarded responses and network errors' do
+  it 'does not share opaque generator state between connections' do
+    sockets = Array.new(2) { ContractReadSocket.new }
+    managers = sockets.map { |socket| connection_manager_with_socket(socket) }
+    managers.zip(sockets).each do |manager, socket|
+      manager.stub(:memcached_socket, socket) { manager.establish_connection }
+    end
+    first_random, second_random = managers.map { |manager| manager.instance_variable_get(:@opaque_random) }
+    expected = second_random.dup.urlsafe_base64(8, false)
+    managers.first.generate_opaque
+
+    refute_same first_random, second_random
+    assert_equal expected, managers.last.generate_opaque
+  end
+
+  it 'replaces the opaque generator on reconnect and releases it on close' do
+    socket = ContractReadSocket.new
+    manager = connection_manager_with_socket(socket)
+    manager.stub(:memcached_socket, socket) { manager.establish_connection }
+    first_random = manager.instance_variable_get(:@opaque_random)
+    manager.close
+
+    assert_nil manager.instance_variable_get(:@opaque_random)
+
+    replacement = ContractReadSocket.new
+    manager.stub(:memcached_socket, replacement) { manager.establish_connection }
+    second_random = manager.instance_variable_get(:@opaque_random)
+
+    refute_same first_random, second_random
+    refute_equal first_random.seed, second_random.seed
+    assert_match(/\A[A-Za-z0-9_-]{11}\z/, manager.generate_opaque)
+  end
+
+  it 'does not charge discarded responses to the network failure budget' do
     socket = ContractReadSocket.new
     manager = connection_manager_with_socket(socket)
     manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
+    manager.discard_after_request!
 
     assert_predicate manager, :request_in_progress?
     refute_predicate socket, :closed?
@@ -69,37 +109,51 @@ describe Dalli::Protocol::ConnectionManager do
     assert_empty socket.read_calls
 
     manager.instance_variable_set(:@sock, ContractReadSocket.new(nil))
-    manager.up!
-    error = assert_raises(Dalli::NetworkError) { manager.read(5) }
 
-    assert_instance_of Dalli::NetworkError, error
-    refute_predicate manager, :reconnect_down_server?
+    assert_raises(Dalli::RetryableNetworkError) { manager.read(5) }
+    assert_predicate manager, :reconnect_down_server?
   end
 
-  it 'marks the server down without raising when a discarded response reaches the failure limit' do
+  [false, true].each do |in_rescue|
+    it "records string failures without caller exception context (caller rescue: #{in_rescue})" do
+      manager = connection_manager_with_socket(ContractReadSocket.new)
+      manager.options[:socket_max_failures] = 1
+      reason = 'EOF in read_line'
+
+      error = assert_raises(Dalli::NetworkError) do
+        if in_rescue
+          begin
+            raise ArgumentError, 'unrelated caller failure'
+          rescue ArgumentError
+            manager.error_on_request!(reason)
+          end
+        else
+          manager.error_on_request!(reason)
+        end
+      end
+
+      assert_equal "localhost:11211 is down: #{reason}", error.message
+      refute_predicate manager, :connected?
+      refute_predicate manager, :reconnect_down_server?
+    end
+  end
+
+  it 'records the supplied exception class even when that exception was never raised' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
+    manager.options[:socket_max_failures] = 1
+    failure = EOFError.new('truncated response')
 
-    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first failure') }
+    error = assert_raises(Dalli::NetworkError) { manager.error_on_request!(failure) }
 
-    manager.instance_variable_set(:@sock, ContractReadSocket.new)
-    manager.up!
-    manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
-    manager.finish_request!
-
+    assert_instance_of Dalli::NetworkError, error
+    assert_equal 'localhost:11211 is down: EOFError truncated response', error.message
     refute_predicate manager, :connected?
-    refute_predicate manager, :request_in_progress?
-    refute_predicate manager, :reconnect_down_server?
-
-    error = assert_raises(Dalli::NetworkError) { manager.raise_down_error }
-
-    assert_includes error.message, 'opaque mismatch'
   end
 
   it 'clears pending discard state when a request is closed before completing' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
     manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
+    manager.discard_after_request!
     manager.close
 
     replacement = ContractReadSocket.new
@@ -115,39 +169,8 @@ describe Dalli::Protocol::ConnectionManager do
   it 'requires an active request before recording a discard' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
 
-    assert_raises(RuntimeError) { manager.discard_after_request!('opaque mismatch') }
+    assert_raises(RuntimeError) { manager.discard_after_request! }
     assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first real failure') }
-  end
-
-  it 'preserves failures across reconnects so repeated stream errors mark the server down' do
-    socket = ContractReadSocket.new(nil)
-    manager = connection_manager_with_socket(socket)
-
-    assert_raises(Dalli::RetryableNetworkError) { manager.read(5) }
-    assert_predicate socket, :closed?
-
-    replacement = ContractReadSocket.new(nil)
-    manager.instance_variable_set(:@sock, replacement)
-    manager.up! # The version handshake succeeded, not the failed operation.
-
-    error = assert_raises(Dalli::NetworkError) { manager.read(5) }
-
-    assert_instance_of Dalli::NetworkError, error
-    assert_predicate replacement, :closed?
-    refute_predicate manager, :reconnect_down_server?
-  end
-
-  it 'resets the failure budget after a successful request' do
-    manager = connection_manager_with_socket(ContractReadSocket.new)
-
-    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first failure') }
-
-    manager.instance_variable_set(:@sock, ContractReadSocket.new)
-    manager.up!
-    manager.start_request!
-    manager.finish_request!
-
-    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('independent failure') }
   end
 
   it 'allows a fresh failure budget when a down server is probed again' do
@@ -162,16 +185,6 @@ describe Dalli::Protocol::ConnectionManager do
     manager.up!
 
     assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('failure after cooldown') }
-  end
-
-  it 'retains a string-valued stream error in the final down error' do
-    manager = connection_manager_with_socket(ContractReadSocket.new)
-
-    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first failure') }
-
-    error = assert_raises(Dalli::NetworkError) { manager.error_on_request!('opaque mismatch') }
-
-    assert_includes error.message, 'opaque mismatch'
   end
 
   it 'returns the full buffer from a single read, binary-safe' do

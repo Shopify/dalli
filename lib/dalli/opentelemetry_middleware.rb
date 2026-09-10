@@ -29,6 +29,10 @@ module Dalli
       end
     end
 
+    def correlation_failure(attributes)
+      OpenTelemetry::Trace.current_span.add_attributes(attributes)
+    end
+
     def storage_req_pipeline(operation, tags = {})
       TRACER.in_span(operation, attributes: tags.merge!(DEFAULT_TRACE_ATTRIBUTES), kind: :client) do |span|
         attributes = {}

@@ -5,102 +5,94 @@ require_relative '../../helper'
 describe Dalli::Protocol::Meta::RequestFormatter do
   describe 'meta_get' do
     let(:key) { SecureRandom.hex(4) }
-    let(:opaque) { SecureRandom.urlsafe_base64(8, false) }
     let(:ttl) { rand(1000..1999) }
 
-    it 'adds an opaque token when passed one' do
-      assert_equal "mg #{key} v f O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: opaque)
+    it 'adds the supplied correlation token' do
+      assert_equal "mg #{key} v f Otoken\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token')
+    end
+
+    it 'preserves other flags when adding a correlation token' do
+      assert_equal "mg #{key} v f c b T#{ttl} t Otoken Proute Lhint\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
+                     key: key, opaque: 'token', return_cas: true, base64: true, ttl: ttl,
+                     meta_flags: ['t'], p_token: 'route', l_token: 'hint'
+                   )
+    end
+
+    it 'rejects caller opaque flags when using an internal correlation token' do
+      ['Ocaller', :Ocaller, 'O'].each do |flag|
+        error = assert_raises(ArgumentError) do
+          Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token', meta_flags: [flag])
+        end
+
+        assert_includes error.message, 'opaque is reserved for single-get response correlation'
+      end
+    end
+
+    it 'returns the default get (get value and bitflags, no cas) when passed only a key' do
+      assert_equal "mg #{key} v f\r\n", Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key)
     end
 
     it 'sets the TTL flag when passed a ttl' do
-      assert_equal "mg #{key} v f T#{ttl} O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: opaque, ttl: ttl)
+      assert_equal "mg #{key} v f T#{ttl}\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, ttl: ttl)
     end
 
     it 'skips the value and bitflags when passed a pure touch argument' do
-      assert_equal "mg #{key} T#{ttl} O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, value: false, ttl: ttl
-                   )
+      assert_equal "mg #{key} T#{ttl}\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, value: false, ttl: ttl)
     end
 
     it 'sets the CAS retrieval flags when passed that value' do
-      assert_equal "mg #{key} c O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, value: false, return_cas: true
-                   )
+      assert_equal "mg #{key} c\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, value: false, return_cas: true)
     end
 
-    it 'continues returning the key and body size for quiet pipelined gets' do
+    it 'sets the flags for returning the key and body size when passed quiet' do
       assert_equal "mg #{key} v f k q s\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, quiet: true)
     end
 
     it 'appends meta_flags after the standard flags' do
-      assert_equal "mg #{key} v f Xfoo Ybar O#{opaque}\r\n",
+      assert_equal "mg #{key} v f Xfoo Ybar\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, meta_flags: %w[Xfoo Ybar]
-                   )
-    end
-
-    it 'rejects caller-provided opaque meta flags rather than silently replacing them' do
-      ['Ocaller', :Ocaller, 'O'].each do |flag|
-        flags = ['t', flag].freeze
-        error = assert_raises(ArgumentError) do
-          Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: opaque, meta_flags: flags)
-        end
-
-        assert_includes error.message, 'opaque is reserved for single-get response correlation'
-        assert_equal ['t', flag], flags
-      end
-    end
-
-    it 'preserves caller opaque flags when no internal correlation token is supplied' do
-      assert_equal "mg #{key} v f Ocaller k q s\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, quiet: true, meta_flags: ['Ocaller']
+                     key: key, meta_flags: %w[Xfoo Ybar]
                    )
     end
 
     it 'ignores empty meta_flags arrays' do
-      assert_equal "mg #{key} v f O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: opaque, meta_flags: [])
+      assert_equal "mg #{key} v f\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, meta_flags: [])
     end
 
     it 'appends p_token and l_token at the end of the command' do
-      assert_equal "mg #{key} v f O#{opaque} Proute=a Lhint=b\r\n",
+      assert_equal "mg #{key} v f Proute=a Lhint=b\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, p_token: 'route=a', l_token: 'hint=b'
+                     key: key, p_token: 'route=a', l_token: 'hint=b'
                    )
     end
 
     it 'appends p_token without l_token' do
-      assert_equal "mg #{key} v f O#{opaque} Pjust-p\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, p_token: 'just-p'
-                   )
+      assert_equal "mg #{key} v f Pjust-p\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: 'just-p')
     end
 
     it 'appends l_token without p_token' do
-      assert_equal "mg #{key} v f O#{opaque} Ljust-l\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, l_token: 'just-l'
-                   )
+      assert_equal "mg #{key} v f Ljust-l\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, l_token: 'just-l')
     end
 
-    it 'preserves the meta_flags + routing-token ordering' do
-      assert_equal "mg #{key} v f Xfoo O#{opaque} Proute=a Lhint=b\r\n",
+    it 'preserves the meta_flags + routing-token ordering (meta_flags first, then P/L)' do
+      assert_equal "mg #{key} v f Xfoo Proute=a Lhint=b\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, meta_flags: %w[Xfoo], p_token: 'route=a', l_token: 'hint=b'
+                     key: key, meta_flags: %w[Xfoo], p_token: 'route=a', l_token: 'hint=b'
                    )
     end
 
     it 'omits routing tokens when both p_token and l_token are nil' do
-      assert_equal "mg #{key} v f O#{opaque}\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
-                     key: key, opaque: opaque, p_token: nil, l_token: nil
-                   )
+      assert_equal "mg #{key} v f\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: nil, l_token: nil)
     end
   end
 

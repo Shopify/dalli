@@ -27,36 +27,29 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Single-get response correlation
 
-Single-key meta gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`)
-include an internally generated `O` opaque token. Memcached and any intermediary
-must echo the token on value-bearing (`VA`) responses. A wrong token on any get
-response, or a missing token on a `VA` response, is a stream-correlation failure:
-Dalli returns the operation's normal cache-miss result and closes the connection
-without reading or deserializing the body. The rejected operation is **not
-retried**, and its existing metrics record a miss rather than an error.
+Requires memcached 1.6+ and proxies that echo opaque flags on `VA`, `EN`, and `HD`.
 
-Correlation failures log a warning and share failure accounting with network
-errors. With the default `socket_max_failures: 2`, two consecutive failed
-operations mark the server down for `down_retry_delay`. Even the operation that
-reaches this limit returns its miss; subsequent requests use the normal
-server-availability/failover behavior. A successful response resets the failure
-budget, but a reconnect/version handshake alone does not.
+Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send an
+11-character opaque from a connection-local PRNG, reseeded on reconnect/fork.
 
-For compatibility with peers that omit the token on bodyless responses, an
-`EN` or `HD` response **without** an `O` flag is treated as a normal cache miss
-without closing the connection. This includes `touch`, which returns `nil`
-rather than accepting an uncorrelated hit. An explicitly wrong (including empty)
-opaque is still an error. This compatibility exception does not establish
-correlation for bodyless responses.
+- Wrong or missing opaques on any single-get response return a miss and close
+  the connection without reading the body or retrying. Existing metrics record a miss.
+- Mismatches log a warning but do not count toward `socket_max_failures` or mark
+  the server down. Ordinary network-error handling is unchanged.
+- Caller-supplied `O` flags on single gets raise `ArgumentError`.
+- Routing flags and multi-get/pipeline formatting and matching are unchanged.
 
-The `O` flag is reserved for internal correlation on single gets. Passing an
-`O...` flag in `meta_flags` to `get` or `gat` raises `ArgumentError` rather than
-silently replacing the caller's token. Routing tokens (`p_token` and `l_token`)
-remain supported. Multi-get/pipeline request formatting and response matching
-are unchanged; opaque correlation applies only to single gets.
+Correlation checks response identity, not stored-value correctness.
 
-Correlation detects response mix-ups, not incorrect data already stored under a
-key or a wrong body attached to an otherwise correctly correlated header.
+### Diagnostics
+
+- Search warnings for `event=dalli.response_correlation_mismatch`; fields include
+  `server`, `response_code`, `reason`, `expected_opaque`, and `received_opaque`.
+- Received tokens are escaped and limited to 32 bytes; `received_opaque_bytes`
+  records the original length. Missing and empty tokens appear as `nil` and `""`.
+- OpenTelemetry single-get spans include `request_opaque`. Mismatch spans also
+  include `correlation_mismatch=1`, `correlation_failure_reason`, and the received token when present.
+- No counter is emitted; use warning events rather than sampled traces to count detections.
 
 ## Development
 
