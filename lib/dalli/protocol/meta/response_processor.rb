@@ -88,7 +88,7 @@ module Dalli
             value = @value_marshaller.retrieve(raw_value, bitflags_from_tokens(tokens))
             [::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens)), raw_value.bytesize]
           else
-            [::Dalli::CacheResult.new(value: nil, miss: true), 0]
+            status_miss
           end
         end
 

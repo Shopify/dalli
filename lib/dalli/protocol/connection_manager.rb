@@ -155,6 +155,9 @@ module Dalli
       # Defer closing until the request completes so its normal miss result can
       # be returned without aborting finish_request!'s lifecycle bookkeeping.
       def discard_after_request!
+        raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
+
+        Dalli.logger.warn { "#{name} response failed request correlation; discarding connection after request" }
         @discard_after_request = true
       end
 
