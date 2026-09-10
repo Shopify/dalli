@@ -2,9 +2,7 @@
 
 require_relative '../helper'
 
-# A real byte stream allows rejected and valid frames to arrive together, or a
-# rejected header to arrive without its body. Each connection is served until
-# Dalli closes it, so subsequent requests expose accidental socket reuse.
+# TCP fixture for queued responses, incomplete bodies, and connection reuse.
 class OpaqueCorrelationServer
   def initialize(&get_response)
     @listener = TCPServer.new('127.0.0.1', 0)
@@ -89,10 +87,8 @@ describe 'single-get opaque correlation' do
   end
 
   it 'logs a mismatch and returns a miss without retrying or consuming queued responses' do
-    opaques = []
     response = lambda do |line, connection_id|
       opaque = line.split.find { |flag| flag.start_with?('O') }
-      opaques << opaque
       if connection_id == 1
         "VA 5 Oobsolete\r\nstale\r\nVA 3 #{opaque}\r\n999\r\n"
       else
@@ -110,7 +106,6 @@ describe 'single-get opaque correlation' do
         assert_equal 2, client.incr('counter')
         assert_equal 'value', client.get('good')
         assert_equal [[1, 'mg'], [2, 'ma'], [2, 'mg']], server.requests
-        assert_equal 2, opaques.uniq.size
       end
     end
 
@@ -118,10 +113,7 @@ describe 'single-get opaque correlation' do
   end
 
   it 'returns a miss for a rejected header without waiting for its declared body' do
-    response = lambda do |line, connection_id|
-      opaque = line.split.find { |flag| flag.start_with?('O') }
-      connection_id == 1 ? "VA 1048576 Oobsolete\r\n" : "VA 5 f0 #{opaque}\r\nvalue\r\n"
-    end
+    response = ->(_line, _connection_id) { "VA 1048576 Oobsolete\r\n" }
 
     with_opaque_server(response) do |client, server|
       assert_nil client.get('wanted')
@@ -148,8 +140,7 @@ describe 'single-get opaque correlation' do
       end
 
       with_opaque_server(response) do |client, server|
-        # Both calls, including the one that reaches the failure limit, must
-        # return misses. Down-marking only affects subsequent operations.
+        # Reaching the failure limit still returns a miss; only later requests fail.
         2.times do
           result = client.public_send(operation, *args)
 

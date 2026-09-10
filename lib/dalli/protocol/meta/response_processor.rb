@@ -289,16 +289,13 @@ module Dalli
           bitflags_token[1..]
         end
 
-        # Uncorrelated responses return the operation's normal miss result.
-        # Do not retry a correlation failure: account for it and discard the
-        # connection without reading or deserializing the rejected body.
+        # Uncorrelated responses are misses; discard without reading the body or retrying.
         def verify_opaque!(tokens, expected_opaque)
           return true if expected_opaque.nil?
 
           opaque = opaque_from_tokens(tokens)
           return true if opaque == expected_opaque
-          # Some peers omit O on bodyless responses. Treat both EN and HD as
-          # misses in that case; never accept an uncorrelated value or touch hit.
+          # Accept missing O only as a bodyless miss, never as a hit.
           return false if opaque.nil? && [EN, HD].include?(tokens.first)
 
           reason = opaque.nil? ? 'missing opaque' : 'opaque mismatch'

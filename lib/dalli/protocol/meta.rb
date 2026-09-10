@@ -210,7 +210,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = request_opaque
+        opaque = @connection_manager.generate_opaque
         fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
@@ -260,7 +260,7 @@ module Dalli
       def get_with_status(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = request_opaque
+        opaque = @connection_manager.generate_opaque
 
         @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, base64: base64,
@@ -287,7 +287,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = request_opaque
+        opaque = @connection_manager.generate_opaque
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
           write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, base64: base64,
@@ -314,7 +314,7 @@ module Dalli
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
-        opaque = request_opaque
+        opaque = @connection_manager.generate_opaque
 
         @middlewares_stack.retrieve_req('memcached.touch', { 'keys' => key, 'ttl' => ttl }) do
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, value: false, base64: base64)
@@ -329,7 +329,7 @@ module Dalli
       def cas(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = request_opaque
+        opaque = @connection_manager.generate_opaque
 
         @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, return_cas: true,

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'English'
+require 'random/formatter'
 require 'socket'
 require 'timeout'
 
@@ -38,6 +39,7 @@ module Dalli
         @discard_after_request = false
         @sock = nil
         @pid = nil
+        @opaque_random = nil
 
         reset_down_info
       end
@@ -56,10 +58,17 @@ module Dalli
         @sock = memcached_socket
         @sock.sync = false
         @pid = PIDCache.pid
+        @opaque_random = Random.new
         @request_in_progress = false
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError, SocketError => e
         # SocketError = DNS resolution failure
         error_on_request!(e)
+      end
+
+      # Connection-local PRNG, reseeded on reconnect/fork and protected by the request lock.
+      # Eight bytes produce 11 URL-safe characters, below memcached's 32-byte opaque limit.
+      def generate_opaque
+        @opaque_random.urlsafe_base64(8, false)
       end
 
       def reconnect_down_server?
@@ -77,9 +86,7 @@ module Dalli
 
       def up!
         log_up_detected
-        # A successful reconnect/version handshake does not prove the failed
-        # operation will work. Preserve its failure budget across reconnects, but
-        # allow a fresh budget when probing a server after down_retry_delay.
+        # Reconnects preserve failures; a post-cooldown probe starts a fresh budget.
         reset_down_info(reset_failures: !@last_down_at.nil?)
       end
 
@@ -125,6 +132,7 @@ module Dalli
           # @request_in_progress == true.
           @sock = nil
           @pid = nil
+          @opaque_random = nil
           abort_request!
         end
       end
@@ -154,10 +162,8 @@ module Dalli
         end
       end
 
-      # Correlation failures are cache misses, not retryable operations. Share
-      # failure accounting with network errors, but defer connection cleanup
-      # until completion so even the request that marks the server down can
-      # return its miss rather than raising or retrying.
+      # Account for the failure now; close at completion without raising or retrying.
+      # The request returns a miss even if it reaches the server's failure limit.
       def discard_after_request!(reason)
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 

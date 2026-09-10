@@ -27,36 +27,19 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Single-get response correlation
 
-Single-key meta gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`)
-include an internally generated `O` opaque token. Memcached and any intermediary
-must echo the token on value-bearing (`VA`) responses. A wrong token on any get
-response, or a missing token on a `VA` response, is a stream-correlation failure:
-Dalli returns the operation's normal cache-miss result and closes the connection
-without reading or deserializing the body. The rejected operation is **not
-retried**, and its existing metrics record a miss rather than an error.
+Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send an
+11-character opaque from a connection-local PRNG, reseeded on reconnect/fork.
 
-Correlation failures log a warning and share failure accounting with network
-errors. With the default `socket_max_failures: 2`, two consecutive failed
-operations mark the server down for `down_retry_delay`. Even the operation that
-reaches this limit returns its miss; subsequent requests use the normal
-server-availability/failover behavior. A successful response resets the failure
-budget, but a reconnect/version handshake alone does not.
+- Wrong opaques or missing opaques on `VA` return a miss and close the connection,
+  without reading the body or retrying. Existing metrics record a miss.
+- Bare `EN`/`HD` responses remain reusable misses, including `touch` returning `nil`.
+- Failures are logged and count toward `socket_max_failures`; reaching the limit
+  still returns a miss. Later requests use normal failover and `down_retry_delay`.
+- Successful requests reset failure counts; reconnects alone do not.
+- Caller-supplied `O` flags on single gets raise `ArgumentError`.
+- Routing flags and multi-get/pipeline formatting and matching are unchanged.
 
-For compatibility with peers that omit the token on bodyless responses, an
-`EN` or `HD` response **without** an `O` flag is treated as a normal cache miss
-without closing the connection. This includes `touch`, which returns `nil`
-rather than accepting an uncorrelated hit. An explicitly wrong (including empty)
-opaque is still an error. This compatibility exception does not establish
-correlation for bodyless responses.
-
-The `O` flag is reserved for internal correlation on single gets. Passing an
-`O...` flag in `meta_flags` to `get` or `gat` raises `ArgumentError` rather than
-silently replacing the caller's token. Routing tokens (`p_token` and `l_token`)
-remain supported. Multi-get/pipeline request formatting and response matching
-are unchanged; opaque correlation applies only to single gets.
-
-Correlation detects response mix-ups, not incorrect data already stored under a
-key or a wrong body attached to an otherwise correctly correlated header.
+Correlation checks response identity, not stored-value correctness.
 
 ## Development
 
