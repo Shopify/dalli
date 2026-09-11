@@ -23,14 +23,16 @@ module Dalli
         VERSION = 'VERSION'
         SERVER_ERROR = 'SERVER_ERROR'
 
-        def initialize(io_source, value_marshaller)
+        def initialize(io_source, value_marshaller, on_correlation_failure:)
           @io_source = io_source
           @value_marshaller = value_marshaller
+          @on_correlation_failure = on_correlation_failure
         end
 
-        def meta_get_with_value(cache_nils: false, skip_flags: false)
+        def meta_get_with_value(cache_nils: false, skip_flags: false, expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return cache_nils ? ::Dalli::NOT_FOUND : nil if tokens.first == EN
+          return get_miss(cache_nils) unless verify_opaque!(tokens, expected_opaque)
+          return get_miss(cache_nils) if tokens.first == EN
           return true unless tokens.first == VA
 
           if skip_flags
@@ -40,9 +42,10 @@ module Dalli
           end
         end
 
-        def meta_get_with_value_and_cas
+        def meta_get_with_value_and_cas(expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return [nil, 0] if tokens.first == EN
+          return cas_miss unless verify_opaque!(tokens, expected_opaque)
+          return cas_miss if tokens.first == EN
 
           cas = cas_from_tokens(tokens)
           return [nil, cas] unless tokens.first == VA
@@ -50,20 +53,23 @@ module Dalli
           [@value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens)), cas]
         end
 
-        def meta_get_with_value_and_meta_flags(cache_nils: false)
+        def meta_get_with_value_and_meta_flags(cache_nils: false, expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return [(cache_nils ? ::Dalli::NOT_FOUND : nil), {}] if tokens.first == EN
+          return meta_flags_miss(cache_nils) unless verify_opaque!(tokens, expected_opaque)
+          return meta_flags_miss(cache_nils) if tokens.first == EN
 
           meta_flags = meta_flags_from_tokens(tokens)
-          return [(cache_nils ? ::Dalli::NOT_FOUND : nil), meta_flags] unless tokens.first == VA
+          return [get_miss(cache_nils), meta_flags] unless tokens.first == VA
 
           value, bitflag = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))
           meta_flags[:bitflag] = bitflag
           [value, meta_flags]
         end
 
-        def meta_get_without_value
+        def meta_get_without_value(expected_opaque: nil)
           tokens = error_on_unexpected!([EN, HD])
+          return nil unless verify_opaque!(tokens, expected_opaque)
+
           tokens.first == EN ? nil : true
         end
 
@@ -73,16 +79,17 @@ module Dalli
         # The value field may be empty when the tombstone was created with
         # drop_value, which is intentional — callers branch on the
         # predicates rather than nil-ness.
-        def meta_get_with_status
+        def meta_get_with_status(expected_opaque: nil)
           tokens = error_on_unexpected!([VA, EN, HD])
-          return [::Dalli::CacheResult.new(value: nil, miss: true), 0] if tokens.first == EN
+          return status_miss unless verify_opaque!(tokens, expected_opaque)
+          return status_miss if tokens.first == EN
 
           if tokens.first == VA
             raw_value = read_data(tokens[1].to_i)
             value = @value_marshaller.retrieve(raw_value, bitflags_from_tokens(tokens))
             [::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens)), raw_value.bytesize]
           else
-            [::Dalli::CacheResult.new(value: nil, miss: true), 0]
+            status_miss
           end
         end
 
@@ -268,6 +275,10 @@ module Dalli
           KeyRegularizer.decode(encoded_key, base64_encoded)
         end
 
+        def opaque_from_tokens(tokens)
+          tokens.find { |token| token.start_with?('O') }&.slice(1..)
+        end
+
         def body_len_from_tokens(tokens)
           value_from_tokens(tokens, 's')&.to_i
         end
@@ -277,6 +288,33 @@ module Dalli
           return 0 unless bitflags_token
 
           bitflags_token[1..]
+        end
+
+        # Report mismatches to the protocol owner without reading the rejected body.
+        def verify_opaque!(tokens, expected_opaque)
+          return true if expected_opaque.nil?
+
+          opaque = opaque_from_tokens(tokens)
+          return true if opaque == expected_opaque
+
+          @on_correlation_failure.call(expected_opaque, opaque, tokens.first)
+          false
+        end
+
+        def get_miss(cache_nils)
+          cache_nils ? ::Dalli::NOT_FOUND : nil
+        end
+
+        def cas_miss
+          [nil, 0]
+        end
+
+        def meta_flags_miss(cache_nils)
+          [get_miss(cache_nils), {}]
+        end
+
+        def status_miss
+          [::Dalli::CacheResult.new(value: nil, miss: true), 0]
         end
 
         def read_line

@@ -25,6 +25,32 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 * [Forum](https://github.com/petergoldstein/dalli/discussions/categories/q-a) - If you have questions about Dalli, please post them here.
 * [Client API](https://www.rubydoc.info/gems/dalli) - Ruby documentation for the `Dalli::Client` API
 
+## Single-get response correlation
+
+Requires memcached 1.6+ and proxies that echo opaque flags on `VA`, `EN`, and `HD`.
+
+Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send an
+11-character opaque from a connection-local PRNG, reseeded on reconnect/fork.
+
+- Wrong or missing opaques on any single-get response return a miss and close
+  the connection without reading the body or retrying. Existing metrics record a miss.
+- Mismatches log a warning but do not count toward `socket_max_failures` or mark
+  the server down. Ordinary network-error handling is unchanged.
+- Caller-supplied `O` flags on single gets raise `ArgumentError`.
+- Routing flags and multi-get/pipeline formatting and matching are unchanged.
+
+Correlation checks response identity, not stored-value correctness.
+
+### Diagnostics
+
+- Search warnings for `event=dalli.response_correlation_mismatch`; fields include
+  `server`, `response_code`, `reason`, `expected_opaque`, and `received_opaque`.
+- Received tokens are escaped and limited to 32 bytes; `received_opaque_bytes`
+  records the original length. Missing and empty tokens appear as `nil` and `""`.
+- OpenTelemetry single-get spans include `request_opaque`. Mismatch spans also
+  include `correlation_mismatch=1`, `correlation_failure_reason`, and the received token when present.
+- No counter is emitted; use warning events rather than sampled traces to count detections.
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. You can run `bin/console` for an interactive prompt that will allow you to experiment.

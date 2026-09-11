@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require 'English'
+require 'random/formatter'
 require 'socket'
 require 'timeout'
 
@@ -35,8 +35,10 @@ module Dalli
         @socket_type = socket_type
         @options = DEFAULTS.merge(client_options)
         @request_in_progress = false
+        @discard_after_request = false
         @sock = nil
         @pid = nil
+        @opaque_random = nil
 
         reset_down_info
       end
@@ -55,10 +57,17 @@ module Dalli
         @sock = memcached_socket
         @sock.sync = false
         @pid = PIDCache.pid
+        @opaque_random = Random.new
         @request_in_progress = false
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError, SocketError => e
         # SocketError = DNS resolution failure
         error_on_request!(e)
+      end
+
+      # Connection-local PRNG, reseeded on reconnect/fork and protected by the request lock.
+      # Eight bytes produce 11 URL-safe characters, below memcached's 32-byte opaque limit.
+      def generate_opaque
+        @opaque_random.urlsafe_base64(8, false)
       end
 
       def reconnect_down_server?
@@ -85,14 +94,12 @@ module Dalli
       def down!
         close
         log_down_detected
-
-        @error = $ERROR_INFO&.class&.name
-        @msg ||= $ERROR_INFO&.message
         raise_down_error
       end
 
       def raise_down_error
-        raise Dalli::NetworkError, "#{name} is down: #{@error} #{@msg}"
+        detail = [@error, @msg].compact.join(' ')
+        raise Dalli::NetworkError, "#{name} is down: #{detail}"
       end
 
       def socket_timeout
@@ -125,6 +132,7 @@ module Dalli
           # @request_in_progress == true.
           @sock = nil
           @pid = nil
+          @opaque_random = nil
           abort_request!
         end
       end
@@ -147,10 +155,19 @@ module Dalli
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
+        close if @discard_after_request
+      end
+
+      # Return a miss and close at completion, without retrying or marking the server down.
+      def discard_after_request!
+        raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
+
+        @discard_after_request = true
       end
 
       def abort_request!
         @request_in_progress = false
+        @discard_after_request = false
       end
 
       def readline
@@ -203,7 +220,8 @@ module Dalli
 
       def error_on_request!(err_or_string)
         log_warn_message(err_or_string)
-
+        @error = err_or_string.is_a?(Exception) ? err_or_string.class.name : nil
+        @msg = err_or_string.to_s
         @fail_count += 1
         if @fail_count >= max_allowed_failures
           down!
@@ -277,13 +295,8 @@ module Dalli
 
       private
 
-      # Reads exactly `count` bytes. IO#read(count) on a blocking socket blocks
-      # until it has `count` bytes, accumulating across TCP chunks internally,
-      # and only hands back a shorter (or nil) buffer when the stream hits EOF.
-      # So a short read means the peer closed mid-response: raise EOFError and
-      # let read/read_exact's existing `rescue EOFError` route it through
-      # error_on_request!, which closes the dirty socket for a retry on a fresh
-      # connection (and preserves the $ERROR_INFO context down! relies on).
+      # A short blocking read means EOF; read/read_exact route it through
+      # error_on_request! to close the dirty socket and apply the retry policy.
       def read_bytes(count)
         buffer = @sock.read(count)
         return buffer if buffer && buffer.bytesize == count

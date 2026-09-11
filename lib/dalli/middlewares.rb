@@ -13,6 +13,8 @@ module Dalli
       yield attributes
     end
 
+    def correlation_failure(_attributes); end
+
     def storage_req_pipeline(_operation, _tags = {})
       yield
     end

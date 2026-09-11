@@ -7,6 +7,29 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     let(:key) { SecureRandom.hex(4) }
     let(:ttl) { rand(1000..1999) }
 
+    it 'adds the supplied correlation token' do
+      assert_equal "mg #{key} v f Otoken\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token')
+    end
+
+    it 'preserves other flags when adding a correlation token' do
+      assert_equal "mg #{key} v f c b T#{ttl} t Otoken Proute Lhint\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
+                     key: key, opaque: 'token', return_cas: true, base64: true, ttl: ttl,
+                     meta_flags: ['t'], p_token: 'route', l_token: 'hint'
+                   )
+    end
+
+    it 'rejects caller opaque flags when using an internal correlation token' do
+      ['Ocaller', :Ocaller, 'O'].each do |flag|
+        error = assert_raises(ArgumentError) do
+          Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token', meta_flags: [flag])
+        end
+
+        assert_includes error.message, 'opaque is reserved for single-get response correlation'
+      end
+    end
+
     it 'returns the default get (get value and bitflags, no cas) when passed only a key' do
       assert_equal "mg #{key} v f\r\n", Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key)
     end
