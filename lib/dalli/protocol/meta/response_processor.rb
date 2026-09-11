@@ -23,9 +23,10 @@ module Dalli
         VERSION = 'VERSION'
         SERVER_ERROR = 'SERVER_ERROR'
 
-        def initialize(io_source, value_marshaller)
+        def initialize(io_source, value_marshaller, on_correlation_failure:)
           @io_source = io_source
           @value_marshaller = value_marshaller
+          @on_correlation_failure = on_correlation_failure
         end
 
         def meta_get_with_value(cache_nils: false, skip_flags: false, expected_opaque: nil)
@@ -289,17 +290,14 @@ module Dalli
           bitflags_token[1..]
         end
 
-        # Uncorrelated responses are misses; discard without reading the body or retrying.
+        # Report mismatches to the protocol owner without reading the rejected body.
         def verify_opaque!(tokens, expected_opaque)
           return true if expected_opaque.nil?
 
           opaque = opaque_from_tokens(tokens)
           return true if opaque == expected_opaque
-          # Accept missing O only as a bodyless miss, never as a hit.
-          return false if opaque.nil? && [EN, HD].include?(tokens.first)
 
-          reason = opaque.nil? ? 'missing opaque' : 'opaque mismatch'
-          @io_source.discard_after_request!("Response correlation error: #{reason} (#{tokens.first})")
+          @on_correlation_failure.call(expected_opaque, opaque, tokens.first)
           false
         end
 

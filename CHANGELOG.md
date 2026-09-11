@@ -4,10 +4,12 @@ Dalli Changelog
 Unreleased
 ==========
 
-- Correlate single gets with connection-local random opaques; mismatches return misses,
-  recycle connections, and count toward server failure limits without retrying. (mrattle)
-- Accept bare `EN`/`HD` as misses, reject caller `O` flags, and preserve failure counts
-  across reconnects. Multi-get/pipeline behavior is unchanged. (mrattle)
+- Correlate single gets with connection-local random opaques; mismatches return misses
+  and log warnings, closing the connection without retrying or marking the server down. (mrattle)
+- Require memcached 1.6+ and matching opaques on `VA`/`EN`/`HD`; reject caller `O` flags.
+  Existing reconnect reset behavior and multi-get/pipeline behavior are unchanged. (mrattle)
+- Add request opaques to traces and searchable mismatch warnings with expected/received tokens;
+  mismatch trace attributes preserve normal cache-miss status. (mrattle)
 
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a

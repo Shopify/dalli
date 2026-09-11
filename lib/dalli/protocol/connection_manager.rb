@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'English'
 require 'random/formatter'
 require 'socket'
 require 'timeout'
@@ -86,20 +85,21 @@ module Dalli
 
       def up!
         log_up_detected
-        # Reconnects preserve failures; a post-cooldown probe starts a fresh budget.
-        reset_down_info(reset_failures: !@last_down_at.nil?)
+        reset_down_info
       end
 
       # Marks the server instance as down.  Updates the down_at state
       # and raises an Dalli::NetworkError that includes the underlying
       # error in the message.  Calls close to clean up socket state
       def down!
-        mark_down!
+        close
+        log_down_detected
         raise_down_error
       end
 
       def raise_down_error
-        raise Dalli::NetworkError, "#{name} is down: #{@error} #{@msg}"
+        detail = [@error, @msg].compact.join(' ')
+        raise Dalli::NetworkError, "#{name} is down: #{detail}"
       end
 
       def socket_timeout
@@ -155,19 +155,13 @@ module Dalli
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
-        if @discard_after_request
-          @fail_count >= max_allowed_failures ? mark_down! : close
-        else
-          @fail_count = 0
-        end
+        close if @discard_after_request
       end
 
-      # Account for the failure now; close at completion without raising or retrying.
-      # The request returns a miss even if it reaches the server's failure limit.
-      def discard_after_request!(reason)
+      # Return a miss and close at completion, without retrying or marking the server down.
+      def discard_after_request!
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
-        record_failure!(reason)
         @discard_after_request = true
       end
 
@@ -225,7 +219,10 @@ module Dalli
       end
 
       def error_on_request!(err_or_string)
-        record_failure!(err_or_string)
+        log_warn_message(err_or_string)
+        @error = err_or_string.is_a?(Exception) ? err_or_string.class.name : nil
+        @msg = err_or_string.to_s
+        @fail_count += 1
         if @fail_count >= max_allowed_failures
           down!
         else
@@ -241,8 +238,8 @@ module Dalli
         raise Dalli::RetryableNetworkError, message
       end
 
-      def reset_down_info(reset_failures: true)
-        @fail_count = 0 if reset_failures
+      def reset_down_info
+        @fail_count = 0
         @down_at = nil
         @last_down_at = nil
         @msg = nil
@@ -298,26 +295,8 @@ module Dalli
 
       private
 
-      def record_failure!(err_or_string)
-        log_warn_message(err_or_string)
-        @msg = err_or_string.to_s
-        @fail_count += 1
-      end
-
-      def mark_down!
-        close
-        @error = $ERROR_INFO&.class&.name
-        @msg ||= $ERROR_INFO&.message
-        log_down_detected
-      end
-
-      # Reads exactly `count` bytes. IO#read(count) on a blocking socket blocks
-      # until it has `count` bytes, accumulating across TCP chunks internally,
-      # and only hands back a shorter (or nil) buffer when the stream hits EOF.
-      # So a short read means the peer closed mid-response: raise EOFError and
-      # let read/read_exact's existing `rescue EOFError` route it through
-      # error_on_request!, which closes the dirty socket for a retry on a fresh
-      # connection (and preserves the $ERROR_INFO context down! relies on).
+      # A short blocking read means EOF; read/read_exact route it through
+      # error_on_request! to close the dirty socket and apply the retry policy.
       def read_bytes(count)
         buffer = @sock.read(count)
         return buffer if buffer && buffer.bytesize == count

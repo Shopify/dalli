@@ -93,11 +93,11 @@ describe Dalli::Protocol::ConnectionManager do
     assert_match(/\A[A-Za-z0-9_-]{11}\z/, manager.generate_opaque)
   end
 
-  it 'shares failure accounting between discarded responses and network errors' do
+  it 'does not charge discarded responses to the network failure budget' do
     socket = ContractReadSocket.new
     manager = connection_manager_with_socket(socket)
     manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
+    manager.discard_after_request!
 
     assert_predicate manager, :request_in_progress?
     refute_predicate socket, :closed?
@@ -109,37 +109,51 @@ describe Dalli::Protocol::ConnectionManager do
     assert_empty socket.read_calls
 
     manager.instance_variable_set(:@sock, ContractReadSocket.new(nil))
-    manager.up!
-    error = assert_raises(Dalli::NetworkError) { manager.read(5) }
 
-    assert_instance_of Dalli::NetworkError, error
-    refute_predicate manager, :reconnect_down_server?
+    assert_raises(Dalli::RetryableNetworkError) { manager.read(5) }
+    assert_predicate manager, :reconnect_down_server?
   end
 
-  it 'marks the server down without raising when a discarded response reaches the failure limit' do
+  [false, true].each do |in_rescue|
+    it "records string failures without caller exception context (caller rescue: #{in_rescue})" do
+      manager = connection_manager_with_socket(ContractReadSocket.new)
+      manager.options[:socket_max_failures] = 1
+      reason = 'EOF in read_line'
+
+      error = assert_raises(Dalli::NetworkError) do
+        if in_rescue
+          begin
+            raise ArgumentError, 'unrelated caller failure'
+          rescue ArgumentError
+            manager.error_on_request!(reason)
+          end
+        else
+          manager.error_on_request!(reason)
+        end
+      end
+
+      assert_equal "localhost:11211 is down: #{reason}", error.message
+      refute_predicate manager, :connected?
+      refute_predicate manager, :reconnect_down_server?
+    end
+  end
+
+  it 'records the supplied exception class even when that exception was never raised' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
+    manager.options[:socket_max_failures] = 1
+    failure = EOFError.new('truncated response')
 
-    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first failure') }
+    error = assert_raises(Dalli::NetworkError) { manager.error_on_request!(failure) }
 
-    manager.instance_variable_set(:@sock, ContractReadSocket.new)
-    manager.up!
-    manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
-    manager.finish_request!
-
+    assert_instance_of Dalli::NetworkError, error
+    assert_equal 'localhost:11211 is down: EOFError truncated response', error.message
     refute_predicate manager, :connected?
-    refute_predicate manager, :request_in_progress?
-    refute_predicate manager, :reconnect_down_server?
-
-    error = assert_raises(Dalli::NetworkError) { manager.raise_down_error }
-
-    assert_includes error.message, 'opaque mismatch'
   end
 
   it 'clears pending discard state when a request is closed before completing' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
     manager.start_request!
-    manager.discard_after_request!('opaque mismatch')
+    manager.discard_after_request!
     manager.close
 
     replacement = ContractReadSocket.new
@@ -155,7 +169,7 @@ describe Dalli::Protocol::ConnectionManager do
   it 'requires an active request before recording a discard' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
 
-    assert_raises(RuntimeError) { manager.discard_after_request!('opaque mismatch') }
+    assert_raises(RuntimeError) { manager.discard_after_request! }
     assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!('first real failure') }
   end
 

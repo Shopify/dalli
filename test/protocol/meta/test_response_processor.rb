@@ -4,12 +4,11 @@ require_relative '../../helper'
 require 'stringio'
 
 class ResponseProcessorTestIO
-  attr_reader :read_calls, :errors
+  attr_reader :read_calls
 
   def initialize(*chunks)
     @io = StringIO.new(chunks.join)
     @read_calls = []
-    @errors = []
   end
 
   def read_line
@@ -20,13 +19,17 @@ class ResponseProcessorTestIO
     @read_calls << length
     @io.read(length)
   end
-
-  def discard_after_request!(message)
-    @errors << message
-  end
 end
 
 describe Dalli::Protocol::Meta::ResponseProcessor do
+  let(:correlation_failures) { [] }
+
+  def processor_for(io, marshaller = nil)
+    Dalli::Protocol::Meta::ResponseProcessor.new(
+      io, marshaller, on_correlation_failure: ->(*details) { correlation_failures << details }
+    )
+  end
+
   response_codes = %w[VA EN HD]
   [' Owrong-token', ' O', ''].each do |opaque_flag|
     response_codes.each do |code|
@@ -44,9 +47,10 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
         response = code == 'VA' ? "VA 4 f1#{opaque_flag}\r\nNOPE\r\n" : "#{code}#{opaque_flag}\r\n"
 
         response_cases.each do |method_name, options, expected|
+          correlation_failures.clear
           io = ResponseProcessorTestIO.new(response)
           marshaller = Dalli::Protocol::ValueMarshaller.new({})
-          processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
+          processor = processor_for(io, marshaller)
 
           result = processor.public_send(method_name, **options, expected_opaque: 'expected-token')
           if method_name == :meta_get_with_status
@@ -58,14 +62,9 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
             assert_equal expected, result
           end
 
-          if opaque_flag.empty? && code != 'VA'
-            assert_empty io.errors, 'a bodyless response without O is a normal miss'
-          else
-            reason = opaque_flag.empty? ? 'missing opaque' : 'opaque mismatch'
+          received = opaque_flag.empty? ? nil : opaque_flag.strip[1..]
 
-            assert_equal ["Response correlation error: #{reason} (#{code})"], io.errors
-          end
-
+          assert_equal [['expected-token', received, code]], correlation_failures
           assert_empty io.read_calls, 'an uncorrelated body must not be read or deserialized'
         end
       end
@@ -73,7 +72,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
   end
 
   it 'extracts opaque strings and returns nil only when the flag is absent' do
-    processor = Dalli::Protocol::Meta::ResponseProcessor.new(nil, nil)
+    processor = processor_for(nil)
 
     assert_nil processor.opaque_from_tokens(%w[EN])
     assert_equal '', processor.opaque_from_tokens(%w[EN O])
@@ -82,10 +81,10 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
 
   it 'preserves processor behavior when no expected opaque is supplied' do
     io = ResponseProcessorTestIO.new("HD\r\n")
-    processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+    processor = processor_for(io)
 
     assert processor.meta_get_without_value
-    assert_empty io.errors
+    assert_empty correlation_failures
   end
 
   it 'accepts a get response containing the expected opaque token' do
@@ -94,23 +93,23 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
       value
     end
     io = ResponseProcessorTestIO.new("VA 5 f0 Oexpected-token\r\n", 'value', "\r\n")
-    processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, marshaller)
+    processor = processor_for(io, marshaller)
 
     assert_equal 'value', processor.meta_get_with_value(expected_opaque: 'expected-token')
-    assert_empty io.errors
+    assert_empty correlation_failures
     assert_equal [5, 2], io.read_calls
   end
 
   %w[EN HD].each do |code|
     it "keeps the connection for #{code} with the expected opaque" do
       io = ResponseProcessorTestIO.new("#{code} Oexpected-token\r\n")
-      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+      processor = processor_for(io)
 
       result = processor.meta_get_without_value(expected_opaque: 'expected-token')
 
       code == 'EN' ? assert_nil(result) : assert(result)
 
-      assert_empty io.errors
+      assert_empty correlation_failures
     end
   end
 
@@ -142,7 +141,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
 
     response_cases.each do |method_name, line, expected_message|
       io = ResponseProcessorTestIO.new(line)
-      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+      processor = processor_for(io)
 
       err = assert_raises(Dalli::DalliError) do
         processor.public_send(method_name)
@@ -165,7 +164,7 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
 
     response_cases.each do |line|
       io = ResponseProcessorTestIO.new(line)
-      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+      processor = processor_for(io)
 
       err = assert_raises(Dalli::ServerError) do
         processor.meta_set_with_cas
