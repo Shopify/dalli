@@ -27,7 +27,8 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Single-get response correlation
 
-Requires memcached 1.6+ and proxies that echo opaque flags on `VA`, `EN`, and `HD`.
+Supported server: memcached 1.6+ (meta protocol); versions are not checked on connection.
+Servers and proxies must echo opaque flags on `VA`, `EN`, and `HD`.
 
 Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send an
 11-character opaque from a connection-local PRNG, reseeded on reconnect/fork.
@@ -36,7 +37,8 @@ Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send a
   the connection without reading the body or retrying. Existing metrics record a miss.
 - Mismatches log a warning but do not count toward `socket_max_failures` or mark
   the server down. Ordinary network-error handling is unchanged.
-- Caller-supplied `O` flags on single gets raise `ArgumentError`.
+- When Dalli supplies an opaque, caller `O` flags are ignored without mutating the options;
+  exactly one internally generated opaque is sent.
 - Routing flags and multi-get/pipeline formatting and matching are unchanged.
 
 Correlation checks response identity, not stored-value correctness.
@@ -45,11 +47,17 @@ Correlation checks response identity, not stored-value correctness.
 
 - Search warnings for `event=dalli.response_correlation_mismatch`; fields include
   `server`, `response_code`, `reason`, `expected_opaque`, and `received_opaque`.
-- Received tokens are escaped and limited to 32 bytes; `received_opaque_bytes`
-  records the original length. Missing and empty tokens appear as `nil` and `""`.
-- OpenTelemetry single-get spans include `request_opaque`. Mismatch spans also
-  include `correlation_mismatch=1`, `correlation_failure_reason`, and the received token when present.
-- No counter is emitted; use warning events rather than sampled traces to count detections.
+- Logs escape and limit received tokens to 32 bytes; `received_opaque_bytes` records
+  the original length in logs only. Missing and empty tokens appear as `nil` and `""`.
+- Completed OpenTelemetry single-get spans include `request_opaque` for cross-request diagnosis.
+  Mismatch spans add `correlation_mismatch=1`, `correlation_failure_reason`, `response_code`, and `received_opaque` when present.
+- Hooks `record_request_opaque(opaque)` and `correlation_failure(attributes)` run
+  synchronously inside the owning `retrieve_req`.
+- Generic retrieval tags and yielded attributes exclude opaques. Diagnostic hooks carry
+  `request_opaque` and `received_opaque`; never use these as metric dimensions.
+- Custom counters can count `correlation_failure` calls, allowlisting only
+  `correlation_failure_reason` and `response_code` as tags. Call `super` to preserve tracing.
+- No counter is built in; count hook invocations or warning events rather than sampled traces.
 
 ## Development
 

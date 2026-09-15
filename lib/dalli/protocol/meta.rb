@@ -39,8 +39,7 @@ module Dalli
           'correlation_failure_reason' => reason,
           'response_code' => response_code,
           'request_opaque' => expected_opaque,
-          'received_opaque' => received&.encode(Encoding::UTF_8, invalid: :replace, undef: :replace),
-          'received_opaque_bytes' => received_bytes
+          'received_opaque' => received&.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
         }.compact)
       end
 
@@ -236,7 +235,8 @@ module Dalli
         opaque = @connection_manager.generate_opaque
         fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
-        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key, 'request_opaque' => opaque }) do |attributes|
+        @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
+          @middlewares_stack.record_request_opaque(opaque)
           if fast_path
             write("mg #{encoded_key} v O#{opaque}\r\n")
           else
@@ -285,9 +285,8 @@ module Dalli
         routing_kwargs = routing_token_kwargs(options)
         opaque = @connection_manager.generate_opaque
 
-        @middlewares_stack.retrieve_req(
-          'memcached.get_with_status', { 'keys' => key, 'request_opaque' => opaque }
-        ) do |attributes|
+        @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
+          @middlewares_stack.record_request_opaque(opaque)
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, base64: base64,
                                           **routing_kwargs)
           write(req)
@@ -314,8 +313,8 @@ module Dalli
         routing_kwargs = routing_token_kwargs(options)
         opaque = @connection_manager.generate_opaque
 
-        tags = { 'keys' => key, 'ttl' => ttl, 'request_opaque' => opaque }
-        @middlewares_stack.retrieve_req('memcached.gat', tags) do |attributes|
+        @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
+          @middlewares_stack.record_request_opaque(opaque)
           write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, base64: base64,
                                           meta_flags: meta_options, **routing_kwargs))
           @connection_manager.flush
@@ -341,9 +340,8 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         opaque = @connection_manager.generate_opaque
 
-        @middlewares_stack.retrieve_req(
-          'memcached.touch', { 'keys' => key, 'ttl' => ttl, 'request_opaque' => opaque }
-        ) do
+        @middlewares_stack.retrieve_req('memcached.touch', { 'keys' => key, 'ttl' => ttl }) do
+          @middlewares_stack.record_request_opaque(opaque)
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
@@ -358,7 +356,8 @@ module Dalli
         routing_kwargs = routing_token_kwargs(options)
         opaque = @connection_manager.generate_opaque
 
-        @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key, 'request_opaque' => opaque }) do
+        @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
+          @middlewares_stack.record_request_opaque(opaque)
           req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, return_cas: true,
                                           base64: base64, **routing_kwargs)
           write(req)

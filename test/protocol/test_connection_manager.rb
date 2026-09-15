@@ -138,9 +138,11 @@ describe Dalli::Protocol::ConnectionManager do
     end
   end
 
-  it 'records the supplied exception class even when that exception was never raised' do
+  it 'records the latest supplied exception even when it was never raised' do
     manager = connection_manager_with_socket(ContractReadSocket.new)
-    manager.options[:socket_max_failures] = 1
+
+    assert_raises(Dalli::RetryableNetworkError) { manager.error_on_request!(IOError.new('earlier failure')) }
+
     failure = EOFError.new('truncated response')
 
     error = assert_raises(Dalli::NetworkError) { manager.error_on_request!(failure) }
@@ -148,6 +150,21 @@ describe Dalli::Protocol::ConnectionManager do
     assert_instance_of Dalli::NetworkError, error
     assert_equal 'localhost:11211 is down: EOFError truncated response', error.message
     refute_predicate manager, :connected?
+  end
+
+  it 'clears discard state at completion even when the socket is already absent' do
+    manager = connection_manager_with_socket(nil)
+    manager.start_request!
+    manager.discard_after_request!
+    manager.finish_request!
+
+    replacement = ContractReadSocket.new
+    manager.instance_variable_set(:@sock, replacement)
+    manager.start_request!
+    manager.finish_request!
+
+    refute_predicate replacement, :closed?
+    refute_predicate manager, :request_in_progress?
   end
 
   it 'clears pending discard state when a request is closed before completing' do

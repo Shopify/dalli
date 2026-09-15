@@ -17,9 +17,7 @@ module Dalli
         # rubocop:disable Metrics/PerceivedComplexity
         def self.meta_get(key:, opaque: nil, value: true, return_cas: false, ttl: nil, base64: false, quiet: false,
                           meta_flags: nil, p_token: nil, l_token: nil)
-          if opaque && meta_flags&.any? { |flag| flag.to_s.start_with?('O') }
-            raise ArgumentError, 'meta_flags must not include O: opaque is reserved for single-get response correlation'
-          end
+          meta_flags = meta_flags&.reject { |flag| flag.to_s.start_with?('O') } if opaque
 
           cmd = "mg #{key}"
           cmd << ' v f' if value

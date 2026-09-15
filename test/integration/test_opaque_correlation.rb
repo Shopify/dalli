@@ -63,6 +63,19 @@ class OpaqueCorrelationServer
   end
 end
 
+module CorrelationMetricCapture
+  attr_reader :metric_tags, :metric_attributes
+
+  def retrieve_req(operation, tags = {})
+    (@metric_tags ||= []).push(tags.dup, tags)
+    super do |attributes|
+      attributes = attributes.dup if attributes.frozen?
+      (@metric_attributes ||= []) << attributes
+      yield attributes
+    end
+  end
+end
+
 describe 'single-get opaque correlation' do
   def with_opaque_server(response, **options)
     server = OpaqueCorrelationServer.new(&response)
@@ -177,6 +190,47 @@ describe 'single-get opaque correlation' do
         end
 
         assert_equal [[1, 'mg'], [2, 'mg'], [3, 'mg']], server.requests
+      end
+    end
+  end
+
+  metric_operations = [
+    [:get, ['wanted'], nil],
+    [:gat, ['wanted', 30], nil],
+    [:get_cas, ['wanted'], [nil, 0]],
+    [:get_with_status, ['wanted'], nil],
+    [:touch, ['wanted', 30], nil]
+  ]
+  [false, true].each do |with_tracing|
+    metric_operations.each do |operation, args, expected|
+      it "keeps opaque metadata out of metric inputs for #{operation}(#{args.inspect}), tracing: #{with_tracing}" do
+        response = lambda do |line, connection_id|
+          flags = line.split
+          opaque = flags.find { |flag| flag.start_with?('O') }
+          if connection_id == 1
+            flags.include?('v') ? "VA 4 Owrong\r\nNOPE\r\n" : "HD Owrong\r\n"
+          else
+            "VA 5 f0 #{opaque}\r\nvalue\r\n"
+          end
+        end
+        middlewares = [CorrelationMetricCapture]
+        middlewares.unshift(Dalli::OpentelemetryMiddleware) if with_tracing
+
+        with_opaque_server(response, middlewares: middlewares) do |client, _server|
+          result = client.public_send(operation, *args)
+
+          assert_operation_miss(result, operation, expected)
+          assert_equal 'value', client.get('good')
+
+          stack = client.send(:ring).servers.first.instance_variable_get(:@middlewares_stack)
+          allowed_tags = %w[keys ttl db.system]
+          allowed_attributes = %w[value_bytesize hit_count miss_count stale_count]
+
+          refute_empty stack.metric_tags
+          assert(stack.metric_attributes.any? { |attributes| attributes.key?('miss_count') })
+          stack.metric_tags.each { |tags| assert_empty tags.keys - allowed_tags }
+          stack.metric_attributes.each { |attributes| assert_empty attributes.keys - allowed_attributes }
+        end
       end
     end
   end
@@ -338,7 +392,7 @@ describe 'single-get opaque correlation' do
       assert_includes log.string, "expected_opaque=#{attributes['request_opaque'].inspect}"
       assert_includes log.string, "received_opaque=#{preview.inspect} received_opaque_bytes=#{size}"
       assert_equal reason, attributes['correlation_failure_reason']
-      assert_equal size, attributes['received_opaque_bytes']
+      refute attributes.key?('received_opaque_bytes')
       if preview.nil?
         refute attributes.key?('received_opaque')
       else
@@ -368,13 +422,35 @@ describe 'single-get opaque correlation' do
     assert_equal([1, nil, 1, nil, nil], spans.map { |span| span.attributes['correlation_mismatch'] })
   end
 
-  it 'rejects caller opaque flags before sending a get or gat request' do
-    response = ->(_line, _connection_id) { raise 'an invalid request must not be sent' }
+  it 'strips caller opaques from get and gat without dropping the connection' do
+    requests = []
+    response = lambda do |line, _connection_id|
+      flags = line.split
+      requests << flags
+      opaque = flags.find { |flag| flag.start_with?('O') }
+      "VA 5 f0 t30 #{opaque}\r\nvalue\r\n"
+    end
+    caller_flags = ['Ocaller', :Oother, 'O', 't'].freeze
 
     with_opaque_server(response) do |client, server|
-      assert_raises(ArgumentError) { client.get('wanted', meta_flags: ['Ocaller']) }
-      assert_raises(ArgumentError) { client.gat('wanted', 30, meta_flags: ['Ocaller']) }
-      assert_empty server.requests
+      assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
+
+      socket = client.send(:ring).servers.first.sock
+      result = client.gat('wanted', 30, meta_flags: caller_flags)
+
+      refute_nil socket
+      assert_equal 'value', result.first
+      assert_equal 30, result.last[:t]
+      assert_same socket, client.send(:ring).servers.first.sock
+      assert_equal [[1, 'mg'], [1, 'mg']], server.requests
     end
+    requests.each do |flags|
+      opaques = flags.grep(/\AO/)
+
+      assert_equal 1, opaques.size
+      assert_match(/\AO[A-Za-z0-9_-]{11}\z/, opaques.first)
+      assert_includes flags, 't'
+    end
+    assert_equal ['Ocaller', :Oother, 'O', 't'], caller_flags
   end
 end

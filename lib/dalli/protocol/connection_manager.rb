@@ -64,9 +64,11 @@ module Dalli
         error_on_request!(e)
       end
 
-      # Connection-local PRNG, reseeded on reconnect/fork and protected by the request lock.
-      # Eight bytes produce 11 URL-safe characters, below memcached's 32-byte opaque limit.
+      # Connection-local PRNG, reseeded on reconnect/fork. Not synchronised here: callers must
+      # serialise requests per connection (Dalli::Threadsafe / connection pool), as for all socket state.
       def generate_opaque
+        raise '[Dalli] No connection for opaque generation. This may be a bug in Dalli.' unless @opaque_random
+
         @opaque_random.urlsafe_base64(8, false)
       end
 
@@ -155,7 +157,9 @@ module Dalli
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
-        close if @discard_after_request
+        discard = @discard_after_request
+        @discard_after_request = false
+        close if discard
       end
 
       # Return a miss and close at completion, without retrying or marking the server down.

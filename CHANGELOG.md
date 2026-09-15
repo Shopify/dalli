@@ -6,10 +6,12 @@ Unreleased
 
 - Correlate single gets with connection-local random opaques; mismatches return misses
   and log warnings, closing the connection without retrying or marking the server down. (mrattle)
-- Require memcached 1.6+ and matching opaques on `VA`/`EN`/`HD`; reject caller `O` flags.
-  Existing reconnect reset behavior and multi-get/pipeline behavior are unchanged. (mrattle)
-- Add request opaques to traces and searchable mismatch warnings with expected/received tokens;
-  mismatch trace attributes preserve normal cache-miss status. (mrattle)
+- Declare memcached 1.6+ support without adding a connection-time version check.
+  Single-get responses must echo Dalli's opaque; caller `O` flags are ignored. (mrattle)
+- Add request opaques to completed retrieval spans and searchable mismatch warnings;
+  keep opaque metadata out of shared middleware tags and attributes. (mrattle)
+- Server-down errors now report the supplied failure's own class and latest message,
+  including string reasons, instead of unrelated `$ERROR_INFO` context. (mrattle)
 
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a

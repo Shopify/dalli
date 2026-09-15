@@ -20,14 +20,17 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                    )
     end
 
-    it 'rejects caller opaque flags when using an internal correlation token' do
-      ['Ocaller', :Ocaller, 'O'].each do |flag|
-        error = assert_raises(ArgumentError) do
-          Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token', meta_flags: [flag])
-        end
+    it 'replaces every caller opaque with the internal token without mutating the flags' do
+      flags = ['Ocaller', 't', :Oother, 'O', 'h'].freeze
 
-        assert_includes error.message, 'opaque is reserved for single-get response correlation'
-      end
+      assert_equal "mg #{key} v f t h Otoken\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token', meta_flags: flags)
+      assert_equal ['Ocaller', 't', :Oother, 'O', 'h'], flags
+    end
+
+    it 'preserves caller opaques when no internal token is supplied' do
+      assert_equal "mg #{key} v f Ocaller k q s\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, quiet: true, meta_flags: ['Ocaller'])
     end
 
     it 'returns the default get (get value and bitflags, no cas) when passed only a key' do
