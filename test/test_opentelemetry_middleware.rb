@@ -4,6 +4,80 @@ require_relative 'helper'
 require 'dalli/opentelemetry_middleware'
 
 describe 'OpenTelemetry middleware' do
+  describe 'cache_nils instrumentation' do
+    before { OTEL_EXPORTER.reset }
+
+    def read_cache(client, operation, key, options)
+      operation == :get ? client.get(key, options) : client.gat(key, 30, options)
+    end
+
+    def read_spans(operation)
+      name = operation == :get ? 'memcached.read' : 'memcached.gat'
+      OTEL_EXPORTER.finished_spans.select { |span| span.name == name }
+    end
+
+    modes = [false, true]
+    %i[get gat].each do |operation|
+      modes.each do |enabled|
+        modes.each do |metadata|
+          it "records #{operation} misses with cache_nils (raw: #{enabled}, metadata: #{metadata})" do
+            memcached(21_453, '', { raw: enabled, middlewares: [Dalli::OpentelemetryMiddleware] }) do |client|
+              socket = client.send(:ring).servers.first.sock
+              options = { cache_nils: true }
+              options[:meta_flags] = ['t'] if metadata
+              result = read_cache(client, operation, 'missing-nil', options)
+              value = metadata ? result.first : result
+
+              assert_same Dalli::NOT_FOUND, value
+              assert_same socket, client.send(:ring).servers.first.sock
+              assert_equal 1, read_spans(operation).size
+
+              span = read_spans(operation).first
+
+              assert_equal 0, span.attributes['value_bytesize']
+              assert_equal 0, span.attributes['hit_count']
+              assert_equal 1, span.attributes['miss_count']
+              refute_equal OpenTelemetry::Trace::Status::ERROR, span.status.code
+            end
+          end
+        end
+
+        it "records cached nils according to cache_nils=#{enabled} for #{operation}" do
+          memcached(21_453, '', { middlewares: [Dalli::OpentelemetryMiddleware] }) do |client|
+            client.set('cached-nil', nil)
+            socket = client.send(:ring).servers.first.sock
+
+            assert_nil read_cache(client, operation, 'cached-nil', cache_nils: enabled)
+            assert_same socket, client.send(:ring).servers.first.sock
+
+            span = read_spans(operation).first
+
+            assert_equal 0, span.attributes['value_bytesize']
+            assert_equal(enabled ? 1 : 0, span.attributes['hit_count'])
+            assert_equal(enabled ? 0 : 1, span.attributes['miss_count'])
+          end
+        end
+      end
+    end
+
+    it 'runs fetch fallback once and then recognizes the cached nil as a hit' do
+      memcached(21_453, '', { cache_nils: true, middlewares: [Dalli::OpentelemetryMiddleware] }) do |client|
+        socket = client.send(:ring).servers.first.sock
+        calls = 0
+
+        assert_nil(client.fetch('fetch-nil') do
+          calls += 1
+          nil
+        end)
+        assert_nil(client.fetch('fetch-nil') { flunk 'cached nil must not rerun the fallback' })
+        assert_equal 1, calls
+        assert_same socket, client.send(:ring).servers.first.sock
+        assert_equal([0, 1], read_spans(:get).map { |span| span.attributes['hit_count'] })
+        assert_equal([1, 0], read_spans(:get).map { |span| span.attributes['miss_count'] })
+      end
+    end
+  end
+
   it 'emits OpenTelemetry spans when using the OpenTelemetry middleware' do
     OTEL_EXPORTER.reset if OTEL_EXPORTER.respond_to?(:reset)
 

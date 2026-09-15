@@ -4,6 +4,9 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Fix `cache_nils` instrumentation in `get`, `gat`, and `fetch`: handle missing-value
+  sentinels without raising and count cached nils as hits when enabled. (mrattle)
+
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a
   single `IO#read(count)`, which returns a short (truncated) buffer when the
