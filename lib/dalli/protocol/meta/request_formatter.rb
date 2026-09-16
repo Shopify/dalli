@@ -17,7 +17,11 @@ module Dalli
         # rubocop:disable Metrics/PerceivedComplexity
         def self.meta_get(key:, opaque: nil, value: true, return_cas: false, ttl: nil, base64: false, quiet: false,
                           meta_flags: nil, p_token: nil, l_token: nil)
-          meta_flags = meta_flags&.reject { |flag| flag.to_s.start_with?('O') } if opaque
+          if opaque && meta_flags&.any? { |flag| flag.to_s.start_with?('O') }
+            meta_flags = meta_flags.reject do |flag|
+              flag.to_s.start_with?('O')
+            end
+          end
 
           cmd = "mg #{key}"
           cmd << ' v f' if value
