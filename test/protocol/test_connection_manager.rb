@@ -37,10 +37,24 @@ describe Dalli::Protocol::ConnectionManager do
       11_211,
       :tcp,
       socket_failure_delay: nil,
-      socket_max_failures: 2
+      socket_max_failures: 2,
+      correlate_with_opaques: true
     )
     manager.instance_variable_set(:@sock, socket)
     manager
+  end
+
+  [{}, { correlate_with_opaques: false }].each do |options|
+    it "does not seed or generate opaques when correlation is disabled: #{options.inspect}" do
+      manager = Dalli::Protocol::ConnectionManager.new('localhost', 11_211, :tcp, options)
+      socket = ContractReadSocket.new
+      Random.stub(:new, -> { raise 'disabled correlation must not seed a generator' }) do
+        manager.stub(:memcached_socket, socket) { manager.establish_connection }
+
+        assert_nil manager.generate_opaque
+      end
+      assert_nil manager.instance_variable_get(:@opaque_random)
+    end
   end
 
   it 'seeds one connection-local generator and uses it for compact request opaques' do
@@ -56,9 +70,8 @@ describe Dalli::Protocol::ConnectionManager do
       Array.new(100) { manager.generate_opaque }
     end
 
-    assert_equal Array.new(100) { expected.urlsafe_base64(6, false) }, tokens
-    assert_equal 100, tokens.uniq.size
-    assert(tokens.all? { |token| /\A[A-Za-z0-9_-]{8}\z/.match?(token) })
+    assert_equal Array.new(100) { expected.urlsafe_base64(3, false) }, tokens
+    assert(tokens.all? { |token| /\A[A-Za-z0-9_-]{4}\z/.match?(token) })
   end
 
   it 'does not share opaque generator state between connections' do
@@ -68,7 +81,7 @@ describe Dalli::Protocol::ConnectionManager do
       manager.stub(:memcached_socket, socket) { manager.establish_connection }
     end
     first_random, second_random = managers.map { |manager| manager.instance_variable_get(:@opaque_random) }
-    expected = second_random.dup.urlsafe_base64(6, false)
+    expected = second_random.dup.urlsafe_base64(3, false)
     managers.first.generate_opaque
 
     refute_same first_random, second_random
@@ -90,7 +103,7 @@ describe Dalli::Protocol::ConnectionManager do
 
     refute_same first_random, second_random
     refute_equal first_random.seed, second_random.seed
-    assert_match(/\A[A-Za-z0-9_-]{8}\z/, manager.generate_opaque)
+    assert_match(/\A[A-Za-z0-9_-]{4}\z/, manager.generate_opaque)
   end
 
   it 'does not charge discarded responses to the network failure budget' do

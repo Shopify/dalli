@@ -110,7 +110,8 @@ describe 'Network' do
       server_thread.abort_on_exception = true
 
       begin
-        dc = Dalli::Client.new("127.0.0.1:#{port}", raw: true, socket_timeout: 2, socket_max_failures: 2)
+        options = { raw: true, socket_timeout: 2, socket_max_failures: 2, correlate_with_opaques: true }
+        dc = Dalli::Client.new("127.0.0.1:#{port}", options)
         conn_mgr = dc.send(:ring).servers.first.instance_variable_get(:@connection_manager)
 
         assert_equal value, dc.get('trunc_key'),

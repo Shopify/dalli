@@ -23,7 +23,8 @@ module Dalli
         # amount of time to sleep between retries when a failure occurs
         socket_failure_delay: 0.1,
         # Set keepalive
-        keepalive: true
+        keepalive: true,
+        correlate_with_opaques: false
       }.freeze
 
       attr_accessor :hostname, :port, :socket_type, :options
@@ -57,7 +58,7 @@ module Dalli
         @sock = memcached_socket
         @sock.sync = false
         @pid = PIDCache.pid
-        @opaque_random = Random.new
+        @opaque_random = @options[:correlate_with_opaques] == true ? Random.new : nil
         @request_in_progress = false
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError, SocketError => e
         # SocketError = DNS resolution failure
@@ -67,9 +68,10 @@ module Dalli
       # Connection-local PRNG, reseeded on reconnect/fork. Not synchronised here: callers must
       # serialise requests per connection (Dalli::Threadsafe / connection pool), as for all socket state.
       def generate_opaque
+        return unless @options[:correlate_with_opaques] == true
         raise '[Dalli] No connection for opaque generation. This may be a bug in Dalli.' unless @opaque_random
 
-        @opaque_random.urlsafe_base64(6, false) # 48 bits encoded as 8 URL-safe characters.
+        @opaque_random.urlsafe_base64(3, false) # 24 bits encoded as 4 URL-safe characters.
       end
 
       def reconnect_down_server?

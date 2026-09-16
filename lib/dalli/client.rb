@@ -29,6 +29,8 @@ module Dalli
     # - :namespace - prepend each key with this value to provide simple namespacing.
     # - :failover - if a server is down, look for and store values on another server in the ring.  Default: true.
     # - :threadsafe - ensure that only one thread is actively using a socket at a time. Default: true.
+    # - :correlate_with_opaques - opt in to single-get response validation using internal opaque tokens.
+    #                           Defaults to false; caller-provided O flags are preserved when disabled.
     # - :expires_in - default TTL in seconds if you do not pass TTL as a parameter to an individual operation, defaults
     #                 to 0 or forever.
     # - :compress - if true Dalli will compress values larger than compression_min_size bytes before sending them

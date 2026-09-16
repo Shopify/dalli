@@ -77,7 +77,8 @@ module CorrelationMetricCapture
 end
 
 describe 'single-get opaque correlation' do
-  def with_opaque_server(response, **options)
+  def with_opaque_server(response, correlate_with_opaques: true, **options)
+    options[:correlate_with_opaques] = correlate_with_opaques unless correlate_with_opaques.nil?
     server = OpaqueCorrelationServer.new(&response)
     client = Dalli::Client.new(server.address, raw: true, socket_timeout: 0.5,
                                                socket_failure_delay: nil, **options)
@@ -122,9 +123,59 @@ describe 'single-get opaque correlation' do
     manager.stub(:read_line, response, &)
   end
 
+  [nil, false].each do |configuration|
+    it "uses default reads without generated opaques when the option is #{configuration.inspect}" do
+      OTEL_EXPORTER.reset
+      requests = []
+      response = lambda do |line, _connection_id|
+        flags = line.split
+        requests << flags
+        flags.include?('v') ? "VA 5 f0 c7 Oforeign\r\nvalue\r\n" : "HD Oforeign\r\n"
+      end
+      log = StringIO.new
+      logger = Logger.new(log)
+      logger.level = Logger::WARN
+
+      options = { correlate_with_opaques: configuration, middlewares: [Dalli::OpentelemetryMiddleware] }
+      Dalli.stub(:logger, logger) do
+        with_opaque_server(response, **options) do |client, server|
+          assert_equal 'value', client.get('wanted')
+          assert_equal 'value', client.gat('wanted', 30)
+          assert_equal ['value', 7], client.get_cas('wanted')
+          assert_equal 'value', client.get_with_status('wanted').value
+          assert client.touch('wanted', 30)
+          assert_equal Array.new(5) { [1, 'mg'] }, server.requests
+          assert_empty(requests.flat_map { |flags| flags.drop(2).grep(/\AO/) })
+          assert_nil client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+                           .instance_variable_get(:@opaque_random)
+        end
+      end
+
+      assert_empty log.string
+      OTEL_EXPORTER.finished_spans.each do |span|
+        refute span.attributes.key?('request_opaque')
+        refute span.attributes.key?('correlation_mismatch')
+      end
+    end
+
+    it "preserves caller opaques without validation when the option is #{configuration.inspect}" do
+      requests = []
+      response = lambda do |line, _connection_id|
+        requests << line.split
+        "VA 5 f0 t30 Ocaller\r\nvalue\r\n"
+      end
+      with_opaque_server(response, correlate_with_opaques: configuration) do |client, server|
+        assert_equal 'value', client.get('wanted', meta_flags: ['Ocaller']).first
+        assert_equal 'value', client.gat('wanted', 30, meta_flags: ['Ocaller']).first
+        assert_equal [[1, 'mg'], [1, 'mg']], server.requests
+        requests.each { |flags| assert_equal ['Ocaller'], flags.drop(2).grep(/\AO/) }
+      end
+    end
+  end
+
   %i[cas! fetch].each do |operation|
     it "does not overwrite a live key when #{operation} reads a mismatched response" do
-      memcached(21_454, '', { raw: true }) do |client|
+      memcached(21_454, '', { raw: true, correlate_with_opaques: true }) do |client|
         client.set('rejected-read', 'original')
         original_socket = client.send(:ring).servers.first.sock
         calls = 0
@@ -147,7 +198,7 @@ describe 'single-get opaque correlation' do
   end
 
   it 'keeps real memcached connections open for correlated VA, EN, and HD responses' do
-    memcached_persistent do |client|
+    memcached_persistent(21_345, '', { correlate_with_opaques: true }) do |client|
       client.set('opaque-hit', 'value')
       client.delete('opaque-miss')
       server = client.send(:ring).servers.first
@@ -369,7 +420,7 @@ describe 'single-get opaque correlation' do
       assert_equal 1, spans.first.attributes['correlation_mismatch']
       assert_equal 'mismatch', spans.first.attributes['correlation_failure_reason']
       assert_equal 'VA', spans.first.attributes['response_code']
-      assert_match(/\A[A-Za-z0-9_-]{8}\z/, spans.first.attributes['request_opaque'])
+      assert_match(/\A[A-Za-z0-9_-]{4}\z/, spans.first.attributes['request_opaque'])
       assert_equal 'obsolete', spans.first.attributes['received_opaque']
     end
   end
@@ -401,7 +452,7 @@ describe 'single-get opaque correlation' do
       end
       spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == span_name }
 
-      assert_equal 2, opaques.uniq.size
+      assert_equal 2, opaques.size
       assert_equal(opaques, spans.map { |span| span.attributes['request_opaque'] })
       spans.each { |span| refute span.attributes.key?('correlation_mismatch') }
     end
@@ -489,7 +540,7 @@ describe 'single-get opaque correlation' do
       opaques = flags.grep(/\AO/)
 
       assert_equal 1, opaques.size
-      assert_match(/\AO[A-Za-z0-9_-]{8}\z/, opaques.first)
+      assert_match(/\AO[A-Za-z0-9_-]{4}\z/, opaques.first)
       assert_includes flags, 't'
     end
     assert_equal ['Ocaller', :Oother, 'O', 't'], caller_flags

@@ -4,9 +4,8 @@ Dalli Changelog
 Unreleased
 ==========
 
-- Validate single-get responses with pseudorandomized eight-character opaques; mismatches return misses and close
-  the connection without retrying. Add related structured log and trace diagnostics with a middleware hook that can be
-  leveraged by metrics clients. (mrattle)
+- Add opt-in single-get correlation (`correlate_with_opaques: true`) using four-character opaques;
+  mismatches return misses and recycle connections, with log and trace diagnostics. (mrattle)
 - Use conditional `add` for opaque-mismatch `cas!` misses to avoid overwriting existing keys. (mrattle)
 - Report the latest network failure in server-down errors, not unrelated rescued exceptions. (mrattle)
 

@@ -25,6 +25,15 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 * [Forum](https://github.com/petergoldstein/dalli/discussions/categories/q-a) - If you have questions about Dalli, please post them here.
 * [Client API](https://www.rubydoc.info/gems/dalli) - Ruby documentation for the `Dalli::Client` API
 
+## Optional response correlation
+
+Enable single-get response validation with `Dalli::Client.new(servers, correlate_with_opaques: true)`.
+Dalli then uses four-character (24-bit) opaque tokens and ignores caller-supplied `O` flags.
+
+Wrong or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
+Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default reads unchanged.
+Multi-get/pipeline behavior is unchanged.
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. You can run `bin/console` for an interactive prompt that will allow you to experiment.

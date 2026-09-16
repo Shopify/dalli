@@ -6,14 +6,14 @@ describe 'Fork safety' do
   next unless Process.respond_to?(:fork)
 
   it 'automatically reconnects after fork' do
-    memcached_persistent do |dc|
+    memcached_persistent(21_345, '', { correlate_with_opaques: true }) do |dc|
       dc.set('fork_test_key', 'parent_value')
 
       assert_equal 'parent_value', dc.get('fork_test_key')
 
       manager = dc.send(:ring).servers.first.instance_variable_get(:@connection_manager)
       parent_random = manager.instance_variable_get(:@opaque_random)
-      expected_parent_token = parent_random.dup.urlsafe_base64(6, false)
+      expected_parent_token = parent_random.dup.urlsafe_base64(3, false)
 
       # Fork a child process
       read_pipe, write_pipe = IO.pipe
