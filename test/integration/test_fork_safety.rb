@@ -13,7 +13,7 @@ describe 'Fork safety' do
 
       manager = dc.send(:ring).servers.first.instance_variable_get(:@connection_manager)
       parent_random = manager.instance_variable_get(:@opaque_random)
-      expected_parent_token = parent_random.dup.urlsafe_base64(8, false)
+      expected_parent_token = parent_random.dup.urlsafe_base64(6, false)
 
       # Fork a child process
       read_pipe, write_pipe = IO.pipe

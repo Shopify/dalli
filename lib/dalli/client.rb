@@ -227,8 +227,8 @@ module Dalli
     end
 
     ##
-    # like #cas, but will yield to the block whether or not the value
-    # already exists.
+    # Like #cas, but yields on misses and uses add to avoid replacing an existing key.
+    # Reads with a CAS token retain conditional updates, including cached nil values.
     #
     # Returns:
     # - false if the value was changed by someone else.
@@ -510,6 +510,8 @@ module Dalli
       return if value.nil? && !always_set
 
       newvalue = yield(value)
+      return perform(:add, key, newvalue, ttl_or_default(ttl), req_options) if always_set && cas.zero?
+
       perform(:set, key, newvalue, ttl_or_default(ttl), cas, req_options)
     end
 

@@ -4,14 +4,11 @@ Dalli Changelog
 Unreleased
 ==========
 
-- Correlate single gets with connection-local random opaques; mismatches return misses
-  and log warnings, closing the connection without retrying or marking the server down. (mrattle)
-- Declare memcached 1.6+ support without adding a connection-time version check.
-  Single-get responses must echo Dalli's opaque; caller `O` flags are ignored. (mrattle)
-- Add request opaques to completed retrieval spans and searchable mismatch warnings;
-  keep opaque metadata out of shared middleware tags and attributes. (mrattle)
-- Server-down errors now report the supplied failure's own class and latest message,
-  including string reasons, instead of unrelated `$ERROR_INFO` context. (mrattle)
+- Validate single-get responses with pseudorandomized eight-character opaques; mismatches return misses and close
+  the connection without retrying. Add related structured log and trace diagnostics with a middleware hook that can be
+  leveraged by metrics clients. (mrattle)
+- Use conditional `add` for opaque-mismatch `cas!` misses to avoid overwriting existing keys. (mrattle)
+- Report the latest network failure in server-down errors, not unrelated rescued exceptions. (mrattle)
 
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a

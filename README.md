@@ -19,45 +19,11 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Documentation and Information
 
-* [User Documentation](https://github.com/petergoldstein/dalli/wiki) - The documentation is maintained in the repository's wiki.  
+* [User Documentation](https://github.com/petergoldstein/dalli/wiki) - The documentation is maintained in the repository's wiki.
 * [Announcements](https://github.com/petergoldstein/dalli/discussions/categories/announcements) - Announcements of interest to the Dalli community will be posted here.
 * [Bug Reports](https://github.com/petergoldstein/dalli/issues) - If you discover a problem with Dalli, please submit a bug report in the tracker.
 * [Forum](https://github.com/petergoldstein/dalli/discussions/categories/q-a) - If you have questions about Dalli, please post them here.
 * [Client API](https://www.rubydoc.info/gems/dalli) - Ruby documentation for the `Dalli::Client` API
-
-## Single-get response correlation
-
-Supported server: memcached 1.6+ (meta protocol); versions are not checked on connection.
-Servers and proxies must echo opaque flags on `VA`, `EN`, and `HD`.
-
-Single gets (`get`, `gat`, CAS retrieval, `get_with_status`, and `touch`) send an
-11-character opaque from a connection-local PRNG, reseeded on reconnect/fork.
-
-- Wrong or missing opaques on any single-get response return a miss and close
-  the connection without reading the body or retrying. Existing metrics record a miss.
-- Mismatches log a warning but do not count toward `socket_max_failures` or mark
-  the server down. Ordinary network-error handling is unchanged.
-- When Dalli supplies an opaque, caller `O` flags are ignored without mutating the options;
-  exactly one internally generated opaque is sent.
-- Routing flags and multi-get/pipeline formatting and matching are unchanged.
-
-Correlation checks response identity, not stored-value correctness.
-
-### Diagnostics
-
-- Search warnings for `event=dalli.response_correlation_mismatch`; fields include
-  `server`, `response_code`, `reason`, `expected_opaque`, and `received_opaque`.
-- Logs escape and limit received tokens to 32 bytes; `received_opaque_bytes` records
-  the original length in logs only. Missing and empty tokens appear as `nil` and `""`.
-- Completed OpenTelemetry single-get spans include `request_opaque` for cross-request diagnosis.
-  Mismatch spans add `correlation_mismatch=1`, `correlation_failure_reason`, `response_code`, and `received_opaque` when present.
-- Hooks `record_request_opaque(opaque)` and `correlation_failure(attributes)` run
-  synchronously inside the owning `retrieve_req`.
-- Generic retrieval tags and yielded attributes exclude opaques. Diagnostic hooks carry
-  `request_opaque` and `received_opaque`; never use these as metric dimensions.
-- Custom counters can count `correlation_failure` calls, allowlisting only
-  `correlation_failure_reason` and `response_code` as tags. Call `super` to preserve tracing.
-- No counter is built in; count hook invocations or warning events rather than sampled traces.
 
 ## Development
 

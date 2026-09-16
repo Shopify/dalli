@@ -69,7 +69,7 @@ module Dalli
       def generate_opaque
         raise '[Dalli] No connection for opaque generation. This may be a bug in Dalli.' unless @opaque_random
 
-        @opaque_random.urlsafe_base64(8, false)
+        @opaque_random.urlsafe_base64(6, false) # 48 bits encoded as 8 URL-safe characters.
       end
 
       def reconnect_down_server?

@@ -56,9 +56,9 @@ describe Dalli::Protocol::ConnectionManager do
       Array.new(100) { manager.generate_opaque }
     end
 
-    assert_equal Array.new(100) { expected.urlsafe_base64(8, false) }, tokens
+    assert_equal Array.new(100) { expected.urlsafe_base64(6, false) }, tokens
     assert_equal 100, tokens.uniq.size
-    assert(tokens.all? { |token| /\A[A-Za-z0-9_-]{11}\z/.match?(token) })
+    assert(tokens.all? { |token| /\A[A-Za-z0-9_-]{8}\z/.match?(token) })
   end
 
   it 'does not share opaque generator state between connections' do
@@ -68,7 +68,7 @@ describe Dalli::Protocol::ConnectionManager do
       manager.stub(:memcached_socket, socket) { manager.establish_connection }
     end
     first_random, second_random = managers.map { |manager| manager.instance_variable_get(:@opaque_random) }
-    expected = second_random.dup.urlsafe_base64(8, false)
+    expected = second_random.dup.urlsafe_base64(6, false)
     managers.first.generate_opaque
 
     refute_same first_random, second_random
@@ -90,7 +90,7 @@ describe Dalli::Protocol::ConnectionManager do
 
     refute_same first_random, second_random
     refute_equal first_random.seed, second_random.seed
-    assert_match(/\A[A-Za-z0-9_-]{11}\z/, manager.generate_opaque)
+    assert_match(/\A[A-Za-z0-9_-]{8}\z/, manager.generate_opaque)
   end
 
   it 'does not charge discarded responses to the network failure budget' do

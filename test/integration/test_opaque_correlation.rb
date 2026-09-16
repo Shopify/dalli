@@ -105,6 +105,47 @@ describe 'single-get opaque correlation' do
     refute_predicate manager, :request_in_progress?
   end
 
+  # Reject one real response header without changing the value held by memcached.
+  def with_rejected_get(client, &)
+    manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+    read_line = manager.method(:read_line)
+    rejected = false
+    response = lambda do
+      line = read_line.call
+      if !rejected && line.start_with?('VA ')
+        rejected = true
+        line.sub(/ O\S+/, ' Owrong-token')
+      else
+        line
+      end
+    end
+    manager.stub(:read_line, response, &)
+  end
+
+  %i[cas! fetch].each do |operation|
+    it "does not overwrite a live key when #{operation} reads a mismatched response" do
+      memcached(21_454, '', { raw: true }) do |client|
+        client.set('rejected-read', 'original')
+        original_socket = client.send(:ring).servers.first.sock
+        calls = 0
+        with_rejected_get(client) do
+          result = client.public_send(operation, 'rejected-read') do |value|
+            calls += 1
+
+            assert_nil value
+            assert_disconnected(client)
+            'replacement'
+          end
+
+          assert_equal 1, calls
+          assert_equal(operation == :cas! ? false : 'replacement', result)
+          assert_equal 'original', client.get('rejected-read')
+          refute_same original_socket, client.send(:ring).servers.first.sock
+        end
+      end
+    end
+  end
+
   it 'keeps real memcached connections open for correlated VA, EN, and HD responses' do
     memcached_persistent do |client|
       client.set('opaque-hit', 'value')
@@ -328,7 +369,7 @@ describe 'single-get opaque correlation' do
       assert_equal 1, spans.first.attributes['correlation_mismatch']
       assert_equal 'mismatch', spans.first.attributes['correlation_failure_reason']
       assert_equal 'VA', spans.first.attributes['response_code']
-      assert_match(/\A[A-Za-z0-9_-]{11}\z/, spans.first.attributes['request_opaque'])
+      assert_match(/\A[A-Za-z0-9_-]{8}\z/, spans.first.attributes['request_opaque'])
       assert_equal 'obsolete', spans.first.attributes['received_opaque']
     end
   end
@@ -448,7 +489,7 @@ describe 'single-get opaque correlation' do
       opaques = flags.grep(/\AO/)
 
       assert_equal 1, opaques.size
-      assert_match(/\AO[A-Za-z0-9_-]{11}\z/, opaques.first)
+      assert_match(/\AO[A-Za-z0-9_-]{8}\z/, opaques.first)
       assert_includes flags, 't'
     end
     assert_equal ['Ocaller', :Oother, 'O', 't'], caller_flags
