@@ -11,6 +11,7 @@ jobs:
       matrix:
         ruby-version:
           - head
+          - '4.0'
           - '3.4'
           - '3.3'
           - '3.2'
@@ -27,12 +28,16 @@ jobs:
         ./install_memcached.sh
     - name: Install and start toxiproxy
       run: ./bin/start-toxiproxy.sh
+    - name: Install io_uring development headers
+      run: sudo apt-get update && sudo apt-get install -y liburing-dev
     - name: Set up Ruby ${{ matrix.ruby-version }}
       uses: ruby/setup-ruby@v1
       with:
         ruby-version: ${{ matrix.ruby-version }}
         bundler-cache: true # 'bundle install' and cache
+        cache-version: io-uring
     - name: Run tests
       run: bundle exec rake
       env:
         RUN_SASL_TESTS: 1
+        IO_EVENT_SELECTOR: URing

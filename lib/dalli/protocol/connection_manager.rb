@@ -114,7 +114,11 @@ module Dalli
         return unless @sock
 
         begin
-          @sock.close
+          begin
+            @sock.to_io.shutdown unless fork_detected?
+          ensure
+            @sock.close
+          end
         rescue StandardError
           nil
         ensure

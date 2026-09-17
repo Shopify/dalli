@@ -22,5 +22,9 @@ group :development, :test do
 end
 
 group :test do
+  if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.3')
+    gem('async')
+    gem('io-event', '~> 1.21.1')
+  end
   gem 'ruby-prof', platform: :mri
 end
