@@ -2,7 +2,6 @@
 
 require 'digest/md5'
 
-# encoding: ascii
 module Dalli
   ##
   # Dalli::Client is the main class which developers will use to interact with
@@ -396,13 +395,12 @@ module Dalli
     # works because Ruby auto-boxes the trailing key/value pairs into a Hash;
     # explicit positional usage (`dc.incr('k', 1, 60, 0, { p_token: 'foo' })`)
     # also works.
-    # rubocop:disable Metrics/ParameterLists
+    # rubocop:disable-next Metrics/ParameterLists
     def incr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
       perform(:incr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
-    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Decr subtracts the given amount from the counter on the memcached server.
@@ -422,13 +420,12 @@ module Dalli
     # If the value already exists, it must have been set with raw: true
     # NOTE: `req_options` is the *fifth* positional argument, not a kwargs hash.
     # See `incr` for an explanation of the calling convention.
-    # rubocop:disable Metrics/ParameterLists
+    # rubocop:disable-next Metrics/ParameterLists
     def decr(key, amt = 1, ttl = nil, default = nil, req_options = nil)
       check_positive!(amt)
 
       perform(:decr, key, amt.to_i, ttl_or_default(ttl), default, req_options)
     end
-    # rubocop:enable Metrics/ParameterLists
 
     ##
     # Flush the memcached server, at 'delay' seconds in the future.

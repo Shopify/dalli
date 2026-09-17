@@ -112,7 +112,7 @@ describe 'performance' do
           end
 
           @m = Dalli::Client.new(@servers)
-          # rubocop:disable Lint/SuppressedException
+          # rubocop:disable-next Lint/SuppressedException
           x.report('missing:ruby:dalli') do
             n.times do
               begin @m.delete @key1; rescue StandardError; end
@@ -123,7 +123,6 @@ describe 'performance' do
               begin @m.get @key3; rescue StandardError; end
             end
           end
-          # rubocop:enable Lint/SuppressedException
 
           @m = Dalli::Client.new(@servers)
           x.report('mixed:ruby:dalli') do
