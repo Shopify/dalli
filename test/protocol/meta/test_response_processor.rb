@@ -43,12 +43,35 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
       io = ResponseProcessorTestIO.new(line)
       processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
 
+      kwargs = method_name == :meta_get_with_value ? { expected_key: 'expected' } : {}
       err = assert_raises(Dalli::DalliError) do
-        processor.public_send(method_name)
+        processor.public_send(method_name, **kwargs)
       end
 
       assert_instance_of Dalli::DalliError, err
       assert_equal expected_message, err.message
+    end
+  end
+
+  it 'rejects mismatched keys from every single-key retrieval response' do
+    response_cases = {
+      meta_get_with_value: "VA 1 kdifferent\r\n",
+      meta_get_with_value_and_cas: "VA 1 c42 kdifferent\r\n",
+      meta_get_with_value_and_meta_flags: "VA 1 kdifferent\r\n",
+      meta_get_without_value: "HD kdifferent\r\n",
+      meta_get_with_status: "VA 1 kdifferent\r\n"
+    }
+
+    response_cases.each do |method_name, line|
+      io = ResponseProcessorTestIO.new(line)
+      processor = Dalli::Protocol::Meta::ResponseProcessor.new(io, nil)
+
+      err = assert_raises(Dalli::ResponseKeyMismatchError) do
+        processor.public_send(method_name, expected_key: 'expected')
+      end
+
+      assert_kind_of(Dalli::DalliError, err)
+      assert_equal('Response key did not match request', err.message)
     end
   end
 

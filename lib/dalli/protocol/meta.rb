@@ -214,18 +214,24 @@ module Dalli
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
           if fast_path
-            write("mg #{encoded_key} v\r\n")
+            write("mg #{encoded_key} v k\r\n")
           else
             write(RequestFormatter.meta_get(key: encoded_key, base64: base64,
                                             meta_flags: meta_options, **routing_kwargs))
           end
           @connection_manager.flush
           result = if fast_path
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+                     response_processor.meta_get_with_value(
+                       expected_key: encoded_key, cache_nils: cache_nils?(options), skip_flags: true
+                     )
                    elsif meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(
+                       expected_key: encoded_key, cache_nils: cache_nils?(options)
+                     )
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(
+                       expected_key: encoded_key, cache_nils: cache_nils?(options)
+                     )
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -259,7 +265,7 @@ module Dalli
                                           **routing_kwargs)
           write(req)
           @connection_manager.flush
-          result, raw_value_bytesize = response_processor.meta_get_with_status
+          result, raw_value_bytesize = response_processor.meta_get_with_status(expected_key: encoded_key)
           unless attributes.frozen?
             # Stale tombstones are CacheResult#hit? at the API layer, but
             # count as non-fresh for hit-rate metrics.
@@ -286,9 +292,11 @@ module Dalli
           write(req)
           @connection_manager.flush
           result = if meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(expected_key: encoded_key,
+                                                                           cache_nils: cache_nils?(options))
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(expected_key: encoded_key,
+                                                            cache_nils: cache_nils?(options))
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -308,7 +316,7 @@ module Dalli
           req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_without_value
+          response_processor.meta_get_without_value(expected_key: encoded_key)
         end
       end
 
@@ -323,7 +331,7 @@ module Dalli
                                           **routing_kwargs)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_with_value_and_cas
+          response_processor.meta_get_with_value_and_cas(expected_key: encoded_key)
         end
       end
 

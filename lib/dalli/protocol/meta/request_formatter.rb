@@ -24,7 +24,8 @@ module Dalli
           cmd << " T#{ttl}" if ttl
           cmd << " #{meta_flags.join(' ')}" if meta_flags && !meta_flags.empty?
           cmd << routing_tokens(p_token: p_token, l_token: l_token)
-          cmd << ' k q s' if quiet # Return the key in the response if quiet
+          cmd << ' k' unless meta_flags&.include?('k') || meta_flags&.include?(:k)
+          cmd << ' q s' if quiet
           cmd + TERMINATOR
         end
 

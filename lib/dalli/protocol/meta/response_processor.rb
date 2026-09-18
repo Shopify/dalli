@@ -28,8 +28,8 @@ module Dalli
           @value_marshaller = value_marshaller
         end
 
-        def meta_get_with_value(cache_nils: false, skip_flags: false)
-          tokens = error_on_unexpected!([VA, EN, HD])
+        def meta_get_with_value(expected_key:, cache_nils: false, skip_flags: false)
+          tokens = meta_get_response([VA, EN, HD], expected_key)
           return cache_nils ? ::Dalli::NOT_FOUND : nil if tokens.first == EN
           return true unless tokens.first == VA
 
@@ -40,8 +40,8 @@ module Dalli
           end
         end
 
-        def meta_get_with_value_and_cas
-          tokens = error_on_unexpected!([VA, EN, HD])
+        def meta_get_with_value_and_cas(expected_key:)
+          tokens = meta_get_response([VA, EN, HD], expected_key)
           return [nil, 0] if tokens.first == EN
 
           cas = cas_from_tokens(tokens)
@@ -50,8 +50,8 @@ module Dalli
           [@value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens)), cas]
         end
 
-        def meta_get_with_value_and_meta_flags(cache_nils: false)
-          tokens = error_on_unexpected!([VA, EN, HD])
+        def meta_get_with_value_and_meta_flags(expected_key:, cache_nils: false)
+          tokens = meta_get_response([VA, EN, HD], expected_key)
           return [(cache_nils ? ::Dalli::NOT_FOUND : nil), {}] if tokens.first == EN
 
           meta_flags = meta_flags_from_tokens(tokens)
@@ -62,8 +62,8 @@ module Dalli
           [value, meta_flags]
         end
 
-        def meta_get_without_value
-          tokens = error_on_unexpected!([EN, HD])
+        def meta_get_without_value(expected_key:)
+          tokens = meta_get_response([EN, HD], expected_key)
           tokens.first == EN ? nil : true
         end
 
@@ -73,8 +73,8 @@ module Dalli
         # The value field may be empty when the tombstone was created with
         # drop_value, which is intentional — callers branch on the
         # predicates rather than nil-ness.
-        def meta_get_with_status
-          tokens = error_on_unexpected!([VA, EN, HD])
+        def meta_get_with_status(expected_key:)
+          tokens = meta_get_response([VA, EN, HD], expected_key)
           return [::Dalli::CacheResult.new(value: nil, miss: true), 0] if tokens.first == EN
 
           if tokens.first == VA
@@ -223,6 +223,13 @@ module Dalli
           raise Dalli::ServerError, line if tokens.first == SERVER_ERROR
 
           raise Dalli::DalliError, "Response error: #{line}"
+        end
+
+        def meta_get_response(expected_codes, expected_key)
+          tokens = error_on_unexpected!(expected_codes)
+          return tokens if value_from_tokens(tokens, 'k') == expected_key
+
+          raise Dalli::ResponseKeyMismatchError, 'Response key did not match request'
         end
 
         def meta_flags_from_tokens(tokens)

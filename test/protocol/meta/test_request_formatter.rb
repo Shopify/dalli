@@ -8,21 +8,21 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     let(:ttl) { rand(1000..1999) }
 
     it 'returns the default get (get value and bitflags, no cas) when passed only a key' do
-      assert_equal "mg #{key} v f\r\n", Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key)
+      assert_equal "mg #{key} v f k\r\n", Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key)
     end
 
     it 'sets the TTL flag when passed a ttl' do
-      assert_equal "mg #{key} v f T#{ttl}\r\n",
+      assert_equal "mg #{key} v f T#{ttl} k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, ttl: ttl)
     end
 
     it 'skips the value and bitflags when passed a pure touch argument' do
-      assert_equal "mg #{key} T#{ttl}\r\n",
+      assert_equal "mg #{key} T#{ttl} k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, value: false, ttl: ttl)
     end
 
     it 'sets the CAS retrieval flags when passed that value' do
-      assert_equal "mg #{key} c\r\n",
+      assert_equal "mg #{key} c k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, value: false, return_cas: true)
     end
 
@@ -32,43 +32,50 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     end
 
     it 'appends meta_flags after the standard flags' do
-      assert_equal "mg #{key} v f Xfoo Ybar\r\n",
+      assert_equal "mg #{key} v f Xfoo Ybar k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
                      key: key, meta_flags: %w[Xfoo Ybar]
                    )
     end
 
     it 'ignores empty meta_flags arrays' do
-      assert_equal "mg #{key} v f\r\n",
+      assert_equal "mg #{key} v f k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, meta_flags: [])
     end
 
+    it 'does not duplicate an explicitly requested key flag' do
+      assert_equal "mg #{key} v f k\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, meta_flags: ['k'])
+      assert_equal "mg #{key} v f k\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, meta_flags: [:k])
+    end
+
     it 'appends p_token and l_token at the end of the command' do
-      assert_equal "mg #{key} v f Proute=a Lhint=b\r\n",
+      assert_equal "mg #{key} v f Proute=a Lhint=b k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
                      key: key, p_token: 'route=a', l_token: 'hint=b'
                    )
     end
 
     it 'appends p_token without l_token' do
-      assert_equal "mg #{key} v f Pjust-p\r\n",
+      assert_equal "mg #{key} v f Pjust-p k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: 'just-p')
     end
 
     it 'appends l_token without p_token' do
-      assert_equal "mg #{key} v f Ljust-l\r\n",
+      assert_equal "mg #{key} v f Ljust-l k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, l_token: 'just-l')
     end
 
     it 'preserves the meta_flags + routing-token ordering (meta_flags first, then P/L)' do
-      assert_equal "mg #{key} v f Xfoo Proute=a Lhint=b\r\n",
+      assert_equal "mg #{key} v f Xfoo Proute=a Lhint=b k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(
                      key: key, meta_flags: %w[Xfoo], p_token: 'route=a', l_token: 'hint=b'
                    )
     end
 
     it 'omits routing tokens when both p_token and l_token are nil' do
-      assert_equal "mg #{key} v f\r\n",
+      assert_equal "mg #{key} v f k\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, p_token: nil, l_token: nil)
     end
   end

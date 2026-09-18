@@ -9,6 +9,8 @@ module Dalli
   # generic error
   class DalliError < RuntimeError; end
 
+  class ResponseKeyMismatchError < DalliError; end
+
   # socket/server communication error
   class NetworkError < DalliError; end
 
