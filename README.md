@@ -19,11 +19,22 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Documentation and Information
 
-* [User Documentation](https://github.com/petergoldstein/dalli/wiki) - The documentation is maintained in the repository's wiki.  
+* [User Documentation](https://github.com/petergoldstein/dalli/wiki) - The documentation is maintained in the repository's wiki.
 * [Announcements](https://github.com/petergoldstein/dalli/discussions/categories/announcements) - Announcements of interest to the Dalli community will be posted here.
 * [Bug Reports](https://github.com/petergoldstein/dalli/issues) - If you discover a problem with Dalli, please submit a bug report in the tracker.
 * [Forum](https://github.com/petergoldstein/dalli/discussions/categories/q-a) - If you have questions about Dalli, please post them here.
 * [Client API](https://www.rubydoc.info/gems/dalli) - Ruby documentation for the `Dalli::Client` API
+
+## Optional response correlation
+
+Enable single-get response validation with `Dalli::Client.new(servers, correlate_with_opaques: true)`.
+Dalli uses the first caller-supplied `O` token in `meta_flags`, or generates a four-character (24-bit) token if none is supplied.
+It sends that token exactly once and checks the echoed value against it.
+
+Wrong or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
+Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default reads unchanged.
+Caller tokens must be protocol-safe and suitably unique per request; reused tokens cannot detect swaps between those requests.
+Multi-get/pipeline behavior is unchanged.
 
 ## Development
 

@@ -279,6 +279,33 @@ describe 'CAS behavior' do
   end
 
   describe 'cas!' do
+    it 'does not overwrite a key created after a missing read' do
+      memcached_persistent do |dc|
+        dc.delete('cas-created-after-miss')
+        result = dc.cas!('cas-created-after-miss') do |value|
+          assert_nil value
+          dc.set('cas-created-after-miss', 'other writer')
+          'replacement'
+        end
+
+        assert_instance_of FalseClass, result
+        assert_equal 'other writer', dc.get('cas-created-after-miss')
+      end
+    end
+
+    it 'updates an existing cached nil using its CAS token' do
+      memcached_persistent do |dc|
+        dc.set('cas-cached-nil', nil)
+        result = dc.cas!('cas-cached-nil') do |value|
+          assert_nil value
+          'updated'
+        end
+
+        assert op_cas_succeeds(result)
+        assert_equal 'updated', dc.get('cas-cached-nil')
+      end
+    end
+
     it 'calls the block and sets a new value  when the key has no existing value' do
       memcached_persistent do |dc|
         dc.flush

@@ -4,6 +4,11 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Add opt-in single-get correlation (`correlate_with_opaques: true`), preferring the first caller opaque or generating one;
+  mismatches return misses and recycle connections, with log and trace diagnostics. (mrattle)
+- Use conditional `add` for opaque-mismatch `cas!` misses to avoid overwriting existing keys. (mrattle)
+- Report the latest network failure in server-down errors, not unrelated rescued exceptions. (mrattle)
+
 - Ensure fixed-length response reads consume exactly the requested number of
   bytes or fail. `ConnectionManager#read` / `#read_exact` previously issued a
   single `IO#read(count)`, which returns a short (truncated) buffer when the

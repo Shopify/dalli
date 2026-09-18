@@ -29,6 +29,8 @@ module Dalli
     # - :namespace - prepend each key with this value to provide simple namespacing.
     # - :failover - if a server is down, look for and store values on another server in the ring.  Default: true.
     # - :threadsafe - ensure that only one thread is actively using a socket at a time. Default: true.
+    # - :correlate_with_opaques - validate single-get replies against the first caller O token, or a generated token.
+    #                           Defaults to false: caller flags pass through without correlation checks.
     # - :expires_in - default TTL in seconds if you do not pass TTL as a parameter to an individual operation, defaults
     #                 to 0 or forever.
     # - :compress - if true Dalli will compress values larger than compression_min_size bytes before sending them
@@ -227,8 +229,8 @@ module Dalli
     end
 
     ##
-    # like #cas, but will yield to the block whether or not the value
-    # already exists.
+    # Like #cas, but yields on misses and uses add to avoid replacing an existing key.
+    # Reads with a CAS token retain conditional updates, including cached nil values.
     #
     # Returns:
     # - false if the value was changed by someone else.
@@ -510,6 +512,8 @@ module Dalli
       return if value.nil? && !always_set
 
       newvalue = yield(value)
+      return perform(:add, key, newvalue, ttl_or_default(ttl), req_options) if always_set && cas.zero?
+
       perform(:set, key, newvalue, ttl_or_default(ttl), cas, req_options)
     end
 
