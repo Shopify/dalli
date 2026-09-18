@@ -295,7 +295,8 @@ module Dalli
           return true if expected_opaque.nil?
 
           opaque = opaque_from_tokens(tokens)
-          return true if opaque == expected_opaque
+          # Caller tokens may use a different Ruby encoding than socket reads.
+          return true if opaque == expected_opaque || (opaque && opaque.b == expected_opaque.b)
 
           @on_correlation_failure.call(expected_opaque, opaque, tokens.first)
           false

@@ -4,7 +4,7 @@ Dalli Changelog
 Unreleased
 ==========
 
-- Add opt-in single-get correlation (`correlate_with_opaques: true`) using four-character opaques;
+- Add opt-in single-get correlation (`correlate_with_opaques: true`), preferring the first caller opaque or generating one;
   mismatches return misses and recycle connections, with log and trace diagnostics. (mrattle)
 - Use conditional `add` for opaque-mismatch `cas!` misses to avoid overwriting existing keys. (mrattle)
 - Report the latest network failure in server-down errors, not unrelated rescued exceptions. (mrattle)

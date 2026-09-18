@@ -20,11 +20,11 @@ describe Dalli::Protocol::Meta::RequestFormatter do
                    )
     end
 
-    it 'replaces every caller opaque with the internal token without mutating the flags' do
+    it 'emits the selected opaque exactly once without mutating caller flags' do
       flags = ['Ocaller', 't', :Oother, 'O', 'h'].freeze
 
-      assert_equal "mg #{key} v f t h Otoken\r\n",
-                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token', meta_flags: flags)
+      assert_equal "mg #{key} v f t h Ocaller\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'caller', meta_flags: flags)
       assert_equal ['Ocaller', 't', :Oother, 'O', 'h'], flags
     end
 

@@ -28,10 +28,12 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 ## Optional response correlation
 
 Enable single-get response validation with `Dalli::Client.new(servers, correlate_with_opaques: true)`.
-Dalli then uses four-character (24-bit) opaque tokens and ignores caller-supplied `O` flags.
+Dalli uses the first caller-supplied `O` token in `meta_flags`, or generates a four-character (24-bit) token if none is supplied.
+It sends that token exactly once and checks the echoed value against it.
 
 Wrong or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
 Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default reads unchanged.
+Caller tokens must be protocol-safe and suitably unique per request; reused tokens cannot detect swaps between those requests.
 Multi-get/pipeline behavior is unchanged.
 
 ## Development

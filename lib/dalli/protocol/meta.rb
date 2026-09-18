@@ -23,6 +23,16 @@ module Dalli
 
       private
 
+      def select_request_opaque(meta_flags = nil)
+        if meta_flags && @connection_manager.options[:correlate_with_opaques] == true
+          meta_flags.each do |flag|
+            token = flag.to_s
+            return token[1..] if token.start_with?('O')
+          end
+        end
+        @connection_manager.generate_opaque
+      end
+
       def record_request_opaque(opaque)
         @middlewares_stack.record_request_opaque(opaque) if opaque
       end
@@ -236,7 +246,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = @connection_manager.generate_opaque
+        opaque = select_request_opaque(meta_options)
         fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
@@ -287,7 +297,7 @@ module Dalli
       def get_with_status(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = @connection_manager.generate_opaque
+        opaque = select_request_opaque(meta_flag_options(options))
 
         @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
           record_request_opaque(opaque)
@@ -315,7 +325,7 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = @connection_manager.generate_opaque
+        opaque = select_request_opaque(meta_options)
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
           record_request_opaque(opaque)
@@ -358,7 +368,7 @@ module Dalli
       def cas(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
-        opaque = @connection_manager.generate_opaque
+        opaque = select_request_opaque(meta_flag_options(options))
 
         @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
           record_request_opaque(opaque)

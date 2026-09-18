@@ -165,10 +165,12 @@ describe 'single-get opaque correlation' do
         "VA 5 f0 t30 Ocaller\r\nvalue\r\n"
       end
       with_opaque_server(response, correlate_with_opaques: configuration) do |client, server|
-        assert_equal 'value', client.get('wanted', meta_flags: ['Ocaller']).first
-        assert_equal 'value', client.gat('wanted', 30, meta_flags: ['Ocaller']).first
+        caller_flags = %w[Ocaller Osecond]
+
+        assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
+        assert_equal 'value', client.gat('wanted', 30, meta_flags: caller_flags).first
         assert_equal [[1, 'mg'], [1, 'mg']], server.requests
-        requests.each { |flags| assert_equal ['Ocaller'], flags.drop(2).grep(/\AO/) }
+        requests.each { |flags| assert_equal caller_flags, flags.drop(2).grep(/\AO/) }
       end
     end
   end
@@ -514,35 +516,71 @@ describe 'single-get opaque correlation' do
     assert_equal([1, nil, 1, nil, nil], spans.map { |span| span.attributes['correlation_mismatch'] })
   end
 
-  it 'strips caller opaques from get and gat without dropping the connection' do
+  it 'uses the first caller opaque exactly once without generating a replacement' do
+    OTEL_EXPORTER.reset
     requests = []
     response = lambda do |line, _connection_id|
       flags = line.split
       requests << flags
-      opaque = flags.find { |flag| flag.start_with?('O') }
-      "VA 5 f0 t30 #{opaque}\r\nvalue\r\n"
+      opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+      "VA 5 f0 c7 t30 #{opaque}\r\nvalue\r\n"
     end
-    caller_flags = ['Ocaller', :Oother, 'O', 't'].freeze
+    caller_flags = [:Ocaller, 'Oother', 'O', 't'].freeze
+
+    with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, server|
+      protocol = client.send(:ring).servers.first
+      manager = protocol.instance_variable_get(:@connection_manager)
+      manager.stub(:generate_opaque, -> { flunk 'a caller token must not be replaced' }) do
+        assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
+
+        socket = protocol.sock
+        result = client.gat('wanted', 30, meta_flags: caller_flags)
+
+        assert_equal 'value', result.first
+        assert_equal 30, result.last[:t]
+        assert_equal ['value', 7], client.get_cas('wanted', meta_flags: caller_flags)
+        assert_equal 'value', client.get_with_status('wanted', meta_flags: caller_flags).value
+        assert_same socket, protocol.sock
+      end
+      assert_equal Array.new(4) { [1, 'mg'] }, server.requests
+    end
+    requests.each { |flags| assert_equal ['Ocaller'], flags.drop(2).grep(/\AO/) }
+    spans = OTEL_EXPORTER.finished_spans.reject { |span| span.name == 'memcached.version' }
+
+    assert_equal(Array.new(4, 'caller'), spans.map { |span| span.attributes['request_opaque'] })
+    assert_equal [:Ocaller, 'Oother', 'O', 't'], caller_flags
+  end
+
+  %i[get gat get_cas get_with_status].each do |operation|
+    it "rejects a reply echoing an unselected caller opaque for #{operation}" do
+      response = ->(_line, _connection_id) { "VA 5 f0 c7 Osecond\r\nvalue\r\n" }
+      options = { meta_flags: %w[Ofirst Osecond] }
+      args = ['wanted']
+      args << 30 if operation == :gat
+      args << options
+      expected = operation == :get_cas ? [nil, 0] : [nil, {}]
+
+      with_opaque_server(response) do |client, server|
+        result = client.public_send(operation, *args)
+
+        assert_operation_miss(result, operation, expected)
+        assert_disconnected(client)
+        assert_equal 2, client.incr('counter')
+        assert_equal [[1, 'mg'], [2, 'ma']], server.requests
+      end
+    end
+  end
+
+  it 'compares caller opaques by wire bytes rather than Ruby string encoding' do
+    response = lambda do |line, _connection_id|
+      opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+      "VA 5 f0 #{opaque}\r\nvalue\r\n"
+    end
 
     with_opaque_server(response) do |client, server|
-      assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
-
-      socket = client.send(:ring).servers.first.sock
-      result = client.gat('wanted', 30, meta_flags: caller_flags)
-
-      refute_nil socket
-      assert_equal 'value', result.first
-      assert_equal 30, result.last[:t]
-      assert_same socket, client.send(:ring).servers.first.sock
-      assert_equal [[1, 'mg'], [1, 'mg']], server.requests
+      assert_equal 'value', client.get('wanted', meta_flags: ['Ocafé']).first
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'mg'], [1, 'ma']], server.requests
     end
-    requests.each do |flags|
-      opaques = flags.grep(/\AO/)
-
-      assert_equal 1, opaques.size
-      assert_match(/\AO[A-Za-z0-9_-]{4}\z/, opaques.first)
-      assert_includes flags, 't'
-    end
-    assert_equal ['Ocaller', :Oother, 'O', 't'], caller_flags
   end
 end
