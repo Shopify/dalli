@@ -16,10 +16,46 @@ module Dalli
       SUPPORTS_CAPACITY = Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.4.0')
 
       def response_processor
-        @response_processor ||= ResponseProcessor.new(@connection_manager, @value_marshaller)
+        @response_processor ||= ResponseProcessor.new(
+          @connection_manager, @value_marshaller, on_correlation_failure: method(:handle_correlation_failure)
+        )
       end
 
       private
+
+      def select_request_opaque(meta_flags = nil)
+        if meta_flags && @connection_manager.options[:correlate_with_opaques] == true
+          meta_flags.each do |flag|
+            token = flag.to_s
+            return token[1..] if token.start_with?('O')
+          end
+        end
+        @connection_manager.generate_opaque
+      end
+
+      def record_request_opaque(opaque)
+        @middlewares_stack.record_request_opaque(opaque) if opaque
+      end
+
+      def handle_correlation_failure(expected_opaque, received_opaque, response_code)
+        @connection_manager.discard_after_request!
+        reason = received_opaque.nil? ? 'missing' : 'mismatch'
+        received_bytes = received_opaque&.bytesize || 0
+        # Bound malformed token diagnostics to memcached's 32-byte opaque limit.
+        received = received_opaque&.byteslice(0, 32)
+        Dalli.logger.warn do
+          "event=dalli.response_correlation_mismatch server=#{name.inspect} " \
+            "response_code=#{response_code} reason=#{reason} expected_opaque=#{expected_opaque.inspect} " \
+            "received_opaque=#{received.inspect} received_opaque_bytes=#{received_bytes}"
+        end
+        @middlewares_stack.correlation_failure({
+          'correlation_mismatch' => 1,
+          'correlation_failure_reason' => reason,
+          'response_code' => response_code,
+          'request_opaque' => expected_opaque,
+          'received_opaque' => received&.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+        }.compact)
+      end
 
       # * only supports single server
       # * only supports set at the moment
@@ -210,22 +246,30 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = select_request_opaque(meta_options)
         fast_path = !meta_options && !base64 && !quiet? && routing_kwargs.empty? && @value_marshaller.raw_by_default
 
         @middlewares_stack.retrieve_req('memcached.read', { 'keys' => key }) do |attributes|
+          record_request_opaque(opaque)
           if fast_path
-            write("mg #{encoded_key} v\r\n")
+            write(opaque ? "mg #{encoded_key} v O#{opaque}\r\n" : "mg #{encoded_key} v\r\n")
           else
-            write(RequestFormatter.meta_get(key: encoded_key, base64: base64,
+            write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, base64: base64,
                                             meta_flags: meta_options, **routing_kwargs))
           end
           @connection_manager.flush
           result = if fast_path
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options), skip_flags: true)
+                     response_processor.meta_get_with_value(
+                       cache_nils: cache_nils?(options), skip_flags: true, expected_opaque: opaque
+                     )
                    elsif meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -253,13 +297,15 @@ module Dalli
       def get_with_status(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = select_request_opaque(meta_flag_options(options))
 
         @middlewares_stack.retrieve_req('memcached.get_with_status', { 'keys' => key }) do |attributes|
-          req = RequestFormatter.meta_get(key: encoded_key, value: true, base64: base64,
+          record_request_opaque(opaque)
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, base64: base64,
                                           **routing_kwargs)
           write(req)
           @connection_manager.flush
-          result, raw_value_bytesize = response_processor.meta_get_with_status
+          result, raw_value_bytesize = response_processor.meta_get_with_status(expected_opaque: opaque)
           unless attributes.frozen?
             # Stale tombstones are CacheResult#hit? at the API layer, but
             # count as non-fresh for hit-rate metrics.
@@ -279,16 +325,19 @@ module Dalli
         encoded_key, base64 = KeyRegularizer.encode(key)
         meta_options = meta_flag_options(options)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = select_request_opaque(meta_options)
 
         @middlewares_stack.retrieve_req('memcached.gat', { 'keys' => key, 'ttl' => ttl }) do |attributes|
-          req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, base64: base64,
-                                          meta_flags: meta_options, **routing_kwargs)
-          write(req)
+          record_request_opaque(opaque)
+          write(RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, base64: base64,
+                                          meta_flags: meta_options, **routing_kwargs))
           @connection_manager.flush
           result = if meta_options
-                     response_processor.meta_get_with_value_and_meta_flags(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value_and_meta_flags(
+                       cache_nils: cache_nils?(options), expected_opaque: opaque
+                     )
                    else
-                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options))
+                     response_processor.meta_get_with_value(cache_nils: cache_nils?(options), expected_opaque: opaque)
                    end
           unless attributes.frozen?
             value = result.is_a?(Array) ? result.first : result
@@ -303,12 +352,14 @@ module Dalli
       def touch(key, ttl)
         ttl = TtlSanitizer.sanitize(ttl)
         encoded_key, base64 = KeyRegularizer.encode(key)
+        opaque = @connection_manager.generate_opaque
 
         @middlewares_stack.retrieve_req('memcached.touch', { 'keys' => key, 'ttl' => ttl }) do
-          req = RequestFormatter.meta_get(key: encoded_key, ttl: ttl, value: false, base64: base64)
+          record_request_opaque(opaque)
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, ttl: ttl, value: false, base64: base64)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_without_value
+          response_processor.meta_get_without_value(expected_opaque: opaque)
         end
       end
 
@@ -317,13 +368,15 @@ module Dalli
       def cas(key, options = nil)
         encoded_key, base64 = KeyRegularizer.encode(key)
         routing_kwargs = routing_token_kwargs(options)
+        opaque = select_request_opaque(meta_flag_options(options))
 
         @middlewares_stack.retrieve_req('memcached.cas', { 'keys' => key }) do
-          req = RequestFormatter.meta_get(key: encoded_key, value: true, return_cas: true, base64: base64,
-                                          **routing_kwargs)
+          record_request_opaque(opaque)
+          req = RequestFormatter.meta_get(key: encoded_key, opaque: opaque, value: true, return_cas: true,
+                                          base64: base64, **routing_kwargs)
           write(req)
           @connection_manager.flush
-          response_processor.meta_get_with_value_and_cas
+          response_processor.meta_get_with_value_and_cas(expected_opaque: opaque)
         end
       end
 

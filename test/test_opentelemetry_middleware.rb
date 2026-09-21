@@ -4,6 +4,91 @@ require_relative 'helper'
 require 'dalli/opentelemetry_middleware'
 
 describe 'OpenTelemetry middleware' do
+  it 'keeps opaque metadata private and attaches it to the owning single-get span' do
+    OTEL_EXPORTER.reset
+    middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+    tags = { 'keys' => 'key' }
+    shared_attributes = nil
+    middleware.retrieve_req('retrieval', tags) do |attributes|
+      shared_attributes = attributes
+      middleware.record_request_opaque('expected123')
+      Dalli::OpentelemetryMiddleware::TRACER.in_span('child') do
+        middleware.correlation_failure('correlation_mismatch' => 1, 'received_opaque' => 'received123')
+      end
+      attributes['miss_count'] = 1
+    end
+    retrieval = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'retrieval' }
+    child = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'child' }
+
+    assert_equal({ 'keys' => 'key', 'db.system' => 'memcached' }, tags)
+    assert_equal({ 'miss_count' => 1 }, shared_attributes)
+    assert_equal 'expected123', retrieval.attributes['request_opaque']
+    assert_equal 'received123', retrieval.attributes['received_opaque']
+    assert_equal 1, retrieval.attributes['correlation_mismatch']
+    refute child.attributes.key?('correlation_mismatch')
+  end
+
+  it 'does not apply trace metadata outside its retrieval scope, including after an interruption' do
+    OTEL_EXPORTER.reset
+    middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+    cancellation = Exception.new('cancelled retrieval')
+    error = assert_raises(Exception) do
+      middleware.retrieve_req('interrupted') do |attributes|
+        attributes['partial_count'] = 1
+        middleware.record_request_opaque('expected123')
+        raise cancellation
+      end
+    end
+    Dalli::OpentelemetryMiddleware::TRACER.in_span('unrelated') do
+      middleware.record_request_opaque('ignored')
+      middleware.correlation_failure('correlation_mismatch' => 1)
+    end
+    interrupted = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'interrupted' }
+    unrelated = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'unrelated' }
+
+    assert_same cancellation, error
+    refute interrupted.attributes.key?('request_opaque')
+    refute interrupted.attributes.key?('partial_count')
+    refute unrelated.attributes.key?('request_opaque')
+    refute unrelated.attributes.key?('correlation_mismatch')
+  end
+
+  it 'restores private trace metadata after nested instrumentation' do
+    OTEL_EXPORTER.reset
+    middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+    middleware.retrieve_req('outer') do
+      middleware.record_request_opaque('outer-token')
+      middleware.retrieve_req('inner') { middleware.record_request_opaque('inner-token') }
+      middleware.correlation_failure('correlation_mismatch' => 1)
+    end
+    outer = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'outer' }
+    inner = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'inner' }
+
+    assert_equal 'outer-token', outer.attributes['request_opaque']
+    assert_equal 1, outer.attributes['correlation_mismatch']
+    assert_equal 'inner-token', inner.attributes['request_opaque']
+    refute inner.attributes.key?('correlation_mismatch')
+  end
+
+  %i[retrieve_req storage_req retrieve_req_pipeline storage_req_pipeline].each do |hook|
+    it "keeps initial tags but not unfinished computed attributes for #{hook}" do
+      OTEL_EXPORTER.reset
+      middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+
+      assert_raises(RuntimeError) do
+        middleware.public_send(hook, 'interrupted', { 'keys' => 'key' }) do |attributes|
+          attributes['partial_count'] = 1
+          raise 'interrupted operation'
+        end
+      end
+      span = OTEL_EXPORTER.finished_spans.find { |item| item.name == 'interrupted' }
+
+      assert_equal 'key', span.attributes['keys']
+      refute span.attributes.key?('partial_count')
+      assert_equal OpenTelemetry::Trace::Status::ERROR, span.status.code
+    end
+  end
+
   it 'emits OpenTelemetry spans when using the OpenTelemetry middleware' do
     OTEL_EXPORTER.reset if OTEL_EXPORTER.respond_to?(:reset)
 

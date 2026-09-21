@@ -7,6 +7,32 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     let(:key) { SecureRandom.hex(4) }
     let(:ttl) { rand(1000..1999) }
 
+    it 'adds the supplied correlation token' do
+      assert_equal "mg #{key} v f Otoken\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'token')
+    end
+
+    it 'preserves other flags when adding a correlation token' do
+      assert_equal "mg #{key} v f c b T#{ttl} t Otoken Proute Lhint\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(
+                     key: key, opaque: 'token', return_cas: true, base64: true, ttl: ttl,
+                     meta_flags: ['t'], p_token: 'route', l_token: 'hint'
+                   )
+    end
+
+    it 'emits the selected opaque exactly once without mutating caller flags' do
+      flags = ['Ocaller', 't', :Oother, 'O', 'h'].freeze
+
+      assert_equal "mg #{key} v f t h Ocaller\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, opaque: 'caller', meta_flags: flags)
+      assert_equal ['Ocaller', 't', :Oother, 'O', 'h'], flags
+    end
+
+    it 'preserves caller opaques when no internal token is supplied' do
+      assert_equal "mg #{key} v f Ocaller k q s\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key, quiet: true, meta_flags: ['Ocaller'])
+    end
+
     it 'returns the default get (get value and bitflags, no cas) when passed only a key' do
       assert_equal "mg #{key} v f\r\n", Dalli::Protocol::Meta::RequestFormatter.meta_get(key: key)
     end

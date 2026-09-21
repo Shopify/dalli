@@ -1,0 +1,586 @@
+# frozen_string_literal: true
+
+require_relative '../helper'
+
+# TCP fixture for queued responses, incomplete bodies, and connection reuse.
+class OpaqueCorrelationServer
+  def initialize(&get_response)
+    @listener = TCPServer.new('127.0.0.1', 0)
+    @requests = Queue.new
+    @get_response = get_response
+    @thread = Thread.new { run }
+  end
+
+  def address
+    "127.0.0.1:#{@listener.addr[1]}"
+  end
+
+  def requests
+    Array.new(@requests.size) { @requests.pop }
+  end
+
+  def close
+    @thread.kill
+    @thread.value
+  ensure
+    @listener.close
+  end
+
+  private
+
+  def run
+    connection_id = 0
+    loop do
+      connection = @listener.accept
+      connection_id += 1
+      serve(connection, connection_id)
+    end
+  end
+
+  def response_for(command, line, connection_id)
+    case command
+    when 'version' then "VERSION 1.6.41-fake\r\n"
+    when 'mg' then @get_response.call(line, connection_id)
+    when 'ma' then "VA 1\r\n2\r\n"
+    else raise "Unexpected command: #{line.inspect}"
+    end
+  end
+
+  def serve(connection, connection_id)
+    while (line = connection.gets("\r\n"))
+      command = line.split.first
+      @requests << [connection_id, command] unless command == 'version'
+      response = response_for(command, line, connection_id)
+      break if response.nil?
+
+      connection.write(response)
+    end
+  rescue Errno::ECONNRESET, Errno::EPIPE
+    # Closing with unread response bytes may reset the peer's connection.
+    nil
+  ensure
+    connection.close
+  end
+end
+
+module CorrelationMetricCapture
+  attr_reader :metric_tags, :metric_attributes
+
+  def retrieve_req(operation, tags = {})
+    (@metric_tags ||= []).push(tags.dup, tags)
+    super do |attributes|
+      attributes = attributes.dup if attributes.frozen?
+      (@metric_attributes ||= []) << attributes
+      yield attributes
+    end
+  end
+end
+
+describe 'single-get opaque correlation' do
+  def with_opaque_server(response, correlate_with_opaques: true, **options)
+    options[:correlate_with_opaques] = correlate_with_opaques unless correlate_with_opaques.nil?
+    server = OpaqueCorrelationServer.new(&response)
+    client = Dalli::Client.new(server.address, raw: true, socket_timeout: 0.5,
+                                               socket_failure_delay: nil, **options)
+    # Bound regressions that accidentally drain a rejected body or retry.
+    Timeout.timeout(3) { yield client, server }
+  ensure
+    client&.close
+    server&.close
+  end
+
+  def assert_operation_miss(result, operation, expected)
+    if operation == :get_with_status
+      assert_predicate result, :miss?
+    elsif expected.nil?
+      assert_nil result
+    else
+      assert_equal expected, result
+    end
+  end
+
+  def assert_disconnected(client)
+    manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+
+    refute_predicate manager, :connected?
+    refute_predicate manager, :request_in_progress?
+  end
+
+  # Reject one real response header without changing the value held by memcached.
+  def with_rejected_get(client, &)
+    manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+    read_line = manager.method(:read_line)
+    rejected = false
+    response = lambda do
+      line = read_line.call
+      if !rejected && line.start_with?('VA ')
+        rejected = true
+        line.sub(/ O\S+/, ' Owrong-token')
+      else
+        line
+      end
+    end
+    manager.stub(:read_line, response, &)
+  end
+
+  [nil, false].each do |configuration|
+    it "uses default reads without generated opaques when the option is #{configuration.inspect}" do
+      OTEL_EXPORTER.reset
+      requests = []
+      response = lambda do |line, _connection_id|
+        flags = line.split
+        requests << flags
+        flags.include?('v') ? "VA 5 f0 c7 Oforeign\r\nvalue\r\n" : "HD Oforeign\r\n"
+      end
+      log = StringIO.new
+      logger = Logger.new(log)
+      logger.level = Logger::WARN
+
+      options = { correlate_with_opaques: configuration, middlewares: [Dalli::OpentelemetryMiddleware] }
+      Dalli.stub(:logger, logger) do
+        with_opaque_server(response, **options) do |client, server|
+          assert_equal 'value', client.get('wanted')
+          assert_equal 'value', client.gat('wanted', 30)
+          assert_equal ['value', 7], client.get_cas('wanted')
+          assert_equal 'value', client.get_with_status('wanted').value
+          assert client.touch('wanted', 30)
+          assert_equal Array.new(5) { [1, 'mg'] }, server.requests
+          assert_empty(requests.flat_map { |flags| flags.drop(2).grep(/\AO/) })
+          assert_nil client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+                           .instance_variable_get(:@opaque_random)
+        end
+      end
+
+      assert_empty log.string
+      OTEL_EXPORTER.finished_spans.each do |span|
+        refute span.attributes.key?('request_opaque')
+        refute span.attributes.key?('correlation_mismatch')
+      end
+    end
+
+    it "preserves caller opaques without validation when the option is #{configuration.inspect}" do
+      requests = []
+      response = lambda do |line, _connection_id|
+        requests << line.split
+        "VA 5 f0 t30 Ocaller\r\nvalue\r\n"
+      end
+      with_opaque_server(response, correlate_with_opaques: configuration) do |client, server|
+        caller_flags = %w[Ocaller Osecond]
+
+        assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
+        assert_equal 'value', client.gat('wanted', 30, meta_flags: caller_flags).first
+        assert_equal [[1, 'mg'], [1, 'mg']], server.requests
+        requests.each { |flags| assert_equal caller_flags, flags.drop(2).grep(/\AO/) }
+      end
+    end
+  end
+
+  %i[cas! fetch].each do |operation|
+    it "does not overwrite a live key when #{operation} reads a mismatched response" do
+      memcached(21_454, '', { raw: true, correlate_with_opaques: true }) do |client|
+        client.set('rejected-read', 'original')
+        original_socket = client.send(:ring).servers.first.sock
+        calls = 0
+        with_rejected_get(client) do
+          result = client.public_send(operation, 'rejected-read') do |value|
+            calls += 1
+
+            assert_nil value
+            assert_disconnected(client)
+            'replacement'
+          end
+
+          assert_equal 1, calls
+          assert_equal(operation == :cas! ? false : 'replacement', result)
+          assert_equal 'original', client.get('rejected-read')
+          refute_same original_socket, client.send(:ring).servers.first.sock
+        end
+      end
+    end
+  end
+
+  it 'keeps real memcached connections open for correlated VA, EN, and HD responses' do
+    memcached_persistent(21_345, '', { correlate_with_opaques: true }) do |client|
+      client.set('opaque-hit', 'value')
+      client.delete('opaque-miss')
+      server = client.send(:ring).servers.first
+      socket = server.sock
+
+      refute_nil socket
+      assert_equal 'value', client.get('opaque-hit')
+      assert_same socket, server.sock
+      assert_nil client.get('opaque-miss')
+      assert_same socket, server.sock
+      assert client.touch('opaque-hit', 30)
+      assert_same socket, server.sock
+    end
+  end
+
+  it 'logs a mismatch and returns a miss without retrying or consuming queued responses' do
+    expected_opaque = nil
+    response = lambda do |line, connection_id|
+      opaque = line.split.find { |flag| flag.start_with?('O') }
+      expected_opaque ||= opaque.delete_prefix('O')
+      if connection_id == 1
+        "VA 5 Oobsolete\r\nstale\r\nVA 3 #{opaque}\r\n999\r\n"
+      else
+        "VA 5 f0 #{opaque}\r\nvalue\r\n"
+      end
+    end
+    log = StringIO.new
+    logger = Logger.new(log)
+    logger.level = Logger::WARN
+
+    Dalli.stub(:logger, logger) do
+      with_opaque_server(response) do |client, server|
+        assert_nil client.get('wanted')
+        assert_disconnected(client)
+        assert_equal 2, client.incr('counter')
+        assert_equal 'value', client.get('good')
+        assert_equal [[1, 'mg'], [2, 'ma'], [2, 'mg']], server.requests
+      end
+    end
+
+    assert_equal 1, log.string.scan('event=dalli.response_correlation_mismatch').size
+    assert_match(/server="127\.0\.0\.1:\d+"/, log.string)
+    assert_includes log.string, 'response_code=VA reason=mismatch'
+    assert_includes log.string, "expected_opaque=#{expected_opaque.inspect}"
+    assert_includes log.string, 'received_opaque="obsolete" received_opaque_bytes=8'
+  end
+
+  it 'returns a miss for a rejected header without waiting for its declared body' do
+    response = ->(_line, _connection_id) { "VA 1048576 Oobsolete\r\n" }
+
+    with_opaque_server(response) do |client, server|
+      assert_nil client.get('wanted')
+      assert_disconnected(client)
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'mg'], [2, 'ma']], server.requests
+    end
+  end
+
+  operations = [
+    [:get, ['wanted'], nil],
+    [:get, ['wanted', { cache_nils: true }], Dalli::NOT_FOUND],
+    [:get, ['wanted', { meta_flags: ['t'] }], [nil, {}]],
+    [:gat, ['wanted', 30], nil],
+    [:gat, ['wanted', 30, { meta_flags: ['t'] }], [nil, {}]],
+    [:get_cas, ['wanted'], [nil, 0]],
+    [:get_with_status, ['wanted'], nil],
+    [:touch, ['wanted', 30], nil]
+  ]
+  operations.each do |operation, args, expected|
+    it "recycles connections without marking the peer down for #{operation}(#{args.inspect})" do
+      response = lambda do |_line, _connection_id|
+        operation == :touch ? "HD Oobsolete\r\n" : "VA 4 f1 Oobsolete\r\nNOPE\r\n"
+      end
+
+      with_opaque_server(response, socket_max_failures: 1) do |client, server|
+        3.times do
+          result = client.public_send(operation, *args)
+
+          assert_operation_miss(result, operation, expected)
+          assert_disconnected(client)
+        end
+
+        assert_equal [[1, 'mg'], [2, 'mg'], [3, 'mg']], server.requests
+      end
+    end
+  end
+
+  metric_operations = [
+    [:get, ['wanted'], nil],
+    [:gat, ['wanted', 30], nil],
+    [:get_cas, ['wanted'], [nil, 0]],
+    [:get_with_status, ['wanted'], nil],
+    [:touch, ['wanted', 30], nil]
+  ]
+  [false, true].each do |with_tracing|
+    metric_operations.each do |operation, args, expected|
+      it "keeps opaque metadata out of metric inputs for #{operation}(#{args.inspect}), tracing: #{with_tracing}" do
+        response = lambda do |line, connection_id|
+          flags = line.split
+          opaque = flags.find { |flag| flag.start_with?('O') }
+          if connection_id == 1
+            flags.include?('v') ? "VA 4 Owrong\r\nNOPE\r\n" : "HD Owrong\r\n"
+          else
+            "VA 5 f0 #{opaque}\r\nvalue\r\n"
+          end
+        end
+        middlewares = [CorrelationMetricCapture]
+        middlewares.unshift(Dalli::OpentelemetryMiddleware) if with_tracing
+
+        with_opaque_server(response, middlewares: middlewares) do |client, _server|
+          result = client.public_send(operation, *args)
+
+          assert_operation_miss(result, operation, expected)
+          assert_equal 'value', client.get('good')
+
+          stack = client.send(:ring).servers.first.instance_variable_get(:@middlewares_stack)
+          allowed_tags = %w[keys ttl db.system]
+          allowed_attributes = %w[value_bytesize hit_count miss_count stale_count]
+
+          refute_empty stack.metric_tags
+          assert(stack.metric_attributes.any? { |attributes| attributes.key?('miss_count') })
+          stack.metric_tags.each { |tags| assert_empty tags.keys - allowed_tags }
+          stack.metric_attributes.each { |attributes| assert_empty attributes.keys - allowed_attributes }
+        end
+      end
+    end
+  end
+
+  %w[EN HD].each do |code|
+    operations.each do |operation, args, expected|
+      it "discards bare #{code} and any queued reply for #{operation}(#{args.inspect})" do
+        response = lambda do |line, _connection_id|
+          opaque = line.split.find { |flag| flag.start_with?('O') }
+          queued = operation == :touch ? "HD #{opaque}\r\n" : "VA 3 #{opaque}\r\n999\r\n"
+          "#{code}\r\n#{queued}"
+        end
+
+        with_opaque_server(response) do |client, server|
+          result = client.public_send(operation, *args)
+
+          assert_operation_miss(result, operation, expected)
+          assert_disconnected(client)
+          assert_equal 2, client.incr('counter')
+          assert_equal [[1, 'mg'], [2, 'ma']], server.requests
+        end
+      end
+    end
+  end
+
+  it 'only closes the connection for a missing opaque even with socket_max_failures: 1' do
+    response = ->(_line, _connection_id) { "VA 4 f1\r\nNOPE\r\n" }
+
+    with_opaque_server(response, socket_max_failures: 1) do |client, server|
+      2.times do
+        assert_nil client.get('wanted')
+        assert_disconnected(client)
+      end
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'mg'], [2, 'mg'], [3, 'ma']], server.requests
+    end
+  end
+
+  it 'preserves ordinary socket-error retries across successful reconnects' do
+    response = lambda do |line, connection_id|
+      next nil if connection_id <= 2
+
+      opaque = line.split.find { |flag| flag.start_with?('O') }
+      "EN #{opaque}\r\n"
+    end
+
+    with_opaque_server(response) do |client, server|
+      assert_nil client.get('wanted')
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'mg'], [2, 'mg'], [3, 'mg'], [3, 'ma']], server.requests
+    end
+  end
+
+  %w[EN HD].each do |code|
+    it "returns a miss and closes the connection for #{code} with the wrong opaque" do
+      response = lambda do |line, connection_id|
+        opaque = line.split.find { |flag| flag.start_with?('O') }
+        connection_id == 1 ? "#{code} Oobsolete\r\n" : "VA 5 f0 #{opaque}\r\nvalue\r\n"
+      end
+
+      with_opaque_server(response) do |client, server|
+        assert_nil client.get('wanted')
+        assert_disconnected(client)
+        assert_equal 'value', client.get('wanted')
+        assert_equal [[1, 'mg'], [2, 'mg']], server.requests
+      end
+    end
+  end
+
+  [
+    [:get, ['wanted'], 'memcached.read'],
+    [:gat, ['wanted', 30], 'memcached.gat'],
+    [:get_with_status, ['wanted'], 'memcached.get_with_status']
+  ].each do |operation, args, span_name|
+    it "records #{operation} correlation failures as OpenTelemetry misses" do
+      OTEL_EXPORTER.reset
+      response = ->(_line, _connection_id) { "VA 4 Oobsolete\r\nNOPE\r\n" }
+
+      options = { middlewares: [Dalli::OpentelemetryMiddleware], socket_max_failures: 1 }
+      with_opaque_server(response, **options) do |client, server|
+        result = client.public_send(operation, *args)
+
+        assert_operation_miss(result, operation, nil)
+        assert_disconnected(client)
+        assert_equal [[1, 'mg']], server.requests
+      end
+
+      spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == span_name }
+
+      assert_equal 1, spans.size
+      refute_equal OpenTelemetry::Trace::Status::ERROR, spans.first.status.code
+      assert_equal 1, spans.first.attributes['miss_count']
+      assert_equal 0, spans.first.attributes['hit_count']
+      assert_equal 0, spans.first.attributes['value_bytesize']
+      assert_equal 1, spans.first.attributes['correlation_mismatch']
+      assert_equal 'mismatch', spans.first.attributes['correlation_failure_reason']
+      assert_equal 'VA', spans.first.attributes['response_code']
+      assert_match(/\A[A-Za-z0-9_-]{4}\z/, spans.first.attributes['request_opaque'])
+      assert_equal 'obsolete', spans.first.attributes['received_opaque']
+    end
+  end
+
+  [
+    [:get, ['wanted'], 'memcached.read', 'value'],
+    [:gat, ['wanted', 30], 'memcached.gat', 'value'],
+    [:get_cas, ['wanted'], 'memcached.cas', ['value', 7]],
+    [:get_with_status, ['wanted'], 'memcached.get_with_status', 'value'],
+    [:touch, ['wanted', 30], 'memcached.touch', true]
+  ].each do |operation, args, span_name, expected|
+    it "records the wire opaque on successful #{operation} spans" do
+      OTEL_EXPORTER.reset
+      opaques = []
+      response = lambda do |line, _connection_id|
+        flags = line.split
+        opaque = flags.find { |flag| flag.start_with?('O') }
+        opaques << opaque.delete_prefix('O')
+        flags.include?('v') ? "VA 5 f0 c7 #{opaque}\r\nvalue\r\n" : "HD #{opaque}\r\n"
+      end
+
+      with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, _server|
+        2.times do
+          result = client.public_send(operation, *args)
+          result = result.value if operation == :get_with_status
+
+          assert_equal expected, result
+        end
+      end
+      spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == span_name }
+
+      assert_equal 2, opaques.size
+      assert_equal(opaques, spans.map { |span| span.attributes['request_opaque'] })
+      spans.each { |span| refute span.attributes.key?('correlation_mismatch') }
+    end
+  end
+
+  [nil, '', ("x\"\\\x00\xff".b * 10)].each do |received|
+    it "logs and traces bounded mismatch details for #{received.inspect}" do
+      OTEL_EXPORTER.reset
+      log = StringIO.new
+      logger = Logger.new(log)
+      logger.level = Logger::WARN
+      logger.formatter = ->(_severity, _time, _progname, message) { "#{message}\n" }
+      flag = received.nil? ? '' : " O#{received}"
+      response = ->(_line, _connection_id) { "VA 4#{flag}\r\nNOPE\r\n" }
+
+      Dalli.stub(:logger, logger) do
+        with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, _server|
+          assert_nil client.get('wanted')
+          assert_disconnected(client)
+        end
+      end
+      attributes = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'memcached.read' }.attributes
+      preview = received&.byteslice(0, 32)
+      size = received&.bytesize || 0
+      reason = received.nil? ? 'missing' : 'mismatch'
+
+      assert_equal 1, log.string.lines.size
+      assert_includes log.string, 'event=dalli.response_correlation_mismatch'
+      assert_includes log.string, "expected_opaque=#{attributes['request_opaque'].inspect}"
+      assert_includes log.string, "received_opaque=#{preview.inspect} received_opaque_bytes=#{size}"
+      assert_equal reason, attributes['correlation_failure_reason']
+      refute attributes.key?('received_opaque_bytes')
+      if preview.nil?
+        refute attributes.key?('received_opaque')
+      else
+        assert_equal preview.encode(Encoding::UTF_8, invalid: :replace, undef: :replace), attributes['received_opaque']
+      end
+    end
+  end
+
+  it 'clears discard state before subsequent requests' do
+    OTEL_EXPORTER.reset
+    response = lambda do |line, _connection_id|
+      opaque = line.split.find { |flag| flag.start_with?('O') }
+      line.split[1] == 'bad' ? "VA 4 Oobsolete\r\nNOPE\r\n" : "VA 5 f0 #{opaque}\r\nvalue\r\n"
+    end
+
+    with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, server|
+      2.times do
+        assert_nil client.get('bad')
+        assert_disconnected(client)
+        assert_equal 'value', client.get('good')
+      end
+      assert_equal 'value', client.get('good')
+      assert_equal [[1, 'mg'], [2, 'mg'], [2, 'mg'], [3, 'mg'], [3, 'mg']], server.requests
+    end
+    spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == 'memcached.read' }
+
+    assert_equal([1, nil, 1, nil, nil], spans.map { |span| span.attributes['correlation_mismatch'] })
+  end
+
+  it 'uses the first caller opaque exactly once without generating a replacement' do
+    OTEL_EXPORTER.reset
+    requests = []
+    response = lambda do |line, _connection_id|
+      flags = line.split
+      requests << flags
+      opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+      "VA 5 f0 c7 t30 #{opaque}\r\nvalue\r\n"
+    end
+    caller_flags = [:Ocaller, 'Oother', 'O', 't'].freeze
+
+    with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, server|
+      protocol = client.send(:ring).servers.first
+      manager = protocol.instance_variable_get(:@connection_manager)
+      manager.stub(:generate_opaque, -> { flunk 'a caller token must not be replaced' }) do
+        assert_equal 'value', client.get('wanted', meta_flags: caller_flags).first
+
+        socket = protocol.sock
+        result = client.gat('wanted', 30, meta_flags: caller_flags)
+
+        assert_equal 'value', result.first
+        assert_equal 30, result.last[:t]
+        assert_equal ['value', 7], client.get_cas('wanted', meta_flags: caller_flags)
+        assert_equal 'value', client.get_with_status('wanted', meta_flags: caller_flags).value
+        assert_same socket, protocol.sock
+      end
+      assert_equal Array.new(4) { [1, 'mg'] }, server.requests
+    end
+    requests.each { |flags| assert_equal ['Ocaller'], flags.drop(2).grep(/\AO/) }
+    spans = OTEL_EXPORTER.finished_spans.reject { |span| span.name == 'memcached.version' }
+
+    assert_equal(Array.new(4, 'caller'), spans.map { |span| span.attributes['request_opaque'] })
+    assert_equal [:Ocaller, 'Oother', 'O', 't'], caller_flags
+  end
+
+  %i[get gat get_cas get_with_status].each do |operation|
+    it "rejects a reply echoing an unselected caller opaque for #{operation}" do
+      response = ->(_line, _connection_id) { "VA 5 f0 c7 Osecond\r\nvalue\r\n" }
+      options = { meta_flags: %w[Ofirst Osecond] }
+      args = ['wanted']
+      args << 30 if operation == :gat
+      args << options
+      expected = operation == :get_cas ? [nil, 0] : [nil, {}]
+
+      with_opaque_server(response) do |client, server|
+        result = client.public_send(operation, *args)
+
+        assert_operation_miss(result, operation, expected)
+        assert_disconnected(client)
+        assert_equal 2, client.incr('counter')
+        assert_equal [[1, 'mg'], [2, 'ma']], server.requests
+      end
+    end
+  end
+
+  it 'compares caller opaques by wire bytes rather than Ruby string encoding' do
+    response = lambda do |line, _connection_id|
+      opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+      "VA 5 f0 #{opaque}\r\nvalue\r\n"
+    end
+
+    with_opaque_server(response) do |client, server|
+      assert_equal 'value', client.get('wanted', meta_flags: ['Ocafé']).first
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'mg'], [1, 'ma']], server.requests
+    end
+  end
+end
