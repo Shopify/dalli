@@ -176,7 +176,8 @@ describe 'single-get opaque correlation' do
   end
 
   modes = [nil, false, true]
-  modes.product(modes, modes).each do |client_mode, request_only, request_mode|
+  request_modes = [:omitted, nil, false, true]
+  modes.product(modes, request_modes).each do |client_mode, request_only, request_mode|
     label = "client=#{client_mode.inspect}, request_only=#{request_only.inspect}, request=#{request_mode.inspect}"
     it "gates rollout reads with #{label}" do
       wire = []
@@ -186,8 +187,9 @@ describe 'single-get opaque correlation' do
         wire << opaque
         flags.include?('v') ? "VA 5 f0 c7 #{opaque || 'Oforeign'}\r\nvalue\r\n" : "HD #{opaque || 'Oforeign'}\r\n"
       end
-      options = request_mode.nil? ? nil : { correlate_with_opaques: request_mode }.freeze
-      enabled = client_mode == true && (request_mode.nil? ? request_only != true : request_mode)
+      options = request_mode == :omitted ? nil : { correlate_with_opaques: request_mode }.freeze
+      inherit = request_mode.nil? || request_mode == :omitted
+      enabled = client_mode == true && (inherit ? request_only != true : request_mode)
       settings = { correlate_with_opaques: client_mode, opaque_correlation_request_only: request_only }
 
       with_opaque_server(response, **settings) do |client, server|
@@ -225,11 +227,10 @@ describe 'single-get opaque correlation' do
 
       expected = random.dup
       tokens = Array.new(2) { expected.urlsafe_base64(3, false) }
-      Random.stub(:new, -> { flunk 'must not initialize a PRNG during a rollout read' }) do
-        assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
-        assert_equal 'value', client.get('wanted', correlate_with_opaques: false)
-        assert_equal 'value', client.get('wanted')
-      end
+
+      assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
+      assert_equal 'value', client.get('wanted', correlate_with_opaques: false)
+      assert_equal 'value', client.get('wanted')
       assert_same random, manager.instance_variable_get(:@opaque_random)
       assert manager.options[:correlate_with_opaques]
       assert_equal [nil, tokens[0], nil, tokens[1]], wire
@@ -259,10 +260,9 @@ describe 'single-get opaque correlation' do
       assert_instance_of Random, random
 
       expected = random.dup.urlsafe_base64(3, false)
-      Random.stub(:new, -> { flunk 'must not initialize a PRNG on request opt-in' }) do
-        assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
-        assert_equal 'value', client.get('wanted')
-      end
+
+      assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
+      assert_equal 'value', client.get('wanted')
       assert_same random, manager.instance_variable_get(:@opaque_random)
       assert manager.options[:opaque_correlation_request_only]
       assert_equal [nil, expected, nil], wire

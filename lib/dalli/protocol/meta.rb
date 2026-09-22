@@ -25,7 +25,9 @@ module Dalli
 
       def correlate_request?(options)
         return false unless @connection_manager.options[:correlate_with_opaques] == true
-        return options[:correlate_with_opaques] == true if options.is_a?(Hash) && options.key?(:correlate_with_opaques)
+
+        requested = options[:correlate_with_opaques] if options.is_a?(Hash)
+        return requested == true unless requested.nil?
 
         @connection_manager.options[:opaque_correlation_request_only] != true
       end

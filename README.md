@@ -54,6 +54,7 @@ client.get('key') # correlate by default
 
 Request-only mode defaults to false. Requests can explicitly opt out with `correlate_with_opaques: false`
 in either mode, but cannot enable correlation when the client option is false or omitted.
+An omitted or `nil` request option inherits the client mode.
 Request options do not mutate client configuration. They also apply to `gat`, CAS reads,
 `get_with_status`, `touch`, and the reads made by `fetch`/`cas!`.
 
