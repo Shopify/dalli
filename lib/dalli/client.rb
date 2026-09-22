@@ -30,7 +30,9 @@ module Dalli
     # - :failover - if a server is down, look for and store values on another server in the ring.  Default: true.
     # - :threadsafe - ensure that only one thread is actively using a socket at a time. Default: true.
     # - :correlate_with_opaques - validate single-get replies against the first caller O token, or a generated token.
-    #                           Defaults to false: caller flags pass through without correlation checks.
+    #                           Defaults to false; an enabled client can opt individual reads out of correlation.
+    # - :opaque_correlation_request_only - require per-request opt-in on a correlation-enabled client.
+    #                                     Defaults to false; does not change eager PRNG initialization.
     # - :expires_in - default TTL in seconds if you do not pass TTL as a parameter to an individual operation, defaults
     #                 to 0 or forever.
     # - :compress - if true Dalli will compress values larger than compression_min_size bytes before sending them
@@ -75,9 +77,9 @@ module Dalli
     ##
     # Touch updates expiration time for a given key.
     #
-    # Returns true if key exists, otherwise nil.
-    def touch(key, ttl = nil)
-      resp = perform(:touch, key, ttl_or_default(ttl))
+    # Returns true if key exists, otherwise nil. req_options accepts :correlate_with_opaques.
+    def touch(key, ttl = nil, req_options = nil)
+      resp = perform(:touch, key, ttl_or_default(ttl), req_options)
       resp.nil? ? nil : true
     end
 
