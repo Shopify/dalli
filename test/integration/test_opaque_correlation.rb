@@ -175,6 +175,210 @@ describe 'single-get opaque correlation' do
     end
   end
 
+  modes = [nil, false, true]
+  modes.product(modes, modes).each do |client_mode, request_only, request_mode|
+    label = "client=#{client_mode.inspect}, request_only=#{request_only.inspect}, request=#{request_mode.inspect}"
+    it "gates rollout reads with #{label}" do
+      wire = []
+      response = lambda do |line, _connection_id|
+        flags = line.split
+        opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+        wire << opaque
+        flags.include?('v') ? "VA 5 f0 c7 #{opaque || 'Oforeign'}\r\nvalue\r\n" : "HD #{opaque || 'Oforeign'}\r\n"
+      end
+      options = request_mode.nil? ? nil : { correlate_with_opaques: request_mode }.freeze
+      enabled = client_mode == true && (request_mode.nil? ? request_only != true : request_mode)
+      settings = { correlate_with_opaques: client_mode, opaque_correlation_request_only: request_only }
+
+      with_opaque_server(response, **settings) do |client, server|
+        assert_equal 'value', client.get('wanted', options)
+        assert_equal 'value', client.gat('wanted', 30, options)
+        assert_equal ['value', 7], client.get_cas('wanted', options)
+        assert_equal 'value', client.get_with_status('wanted', options).value
+        assert client.touch('wanted', 30, options)
+        assert_equal Array.new(5) { [1, 'mg'] }, server.requests
+        if enabled
+          wire.each { |opaque| assert_match(/\AO[A-Za-z0-9_-]{4}\z/, opaque) }
+        else
+          assert_equal Array.new(5), wire
+        end
+      end
+    end
+  end
+
+  it 'uses the eagerly initialized PRNG across off/on/off reads without leaking trace metadata' do
+    OTEL_EXPORTER.reset
+    wire = []
+    response = lambda do |line, _connection_id|
+      opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+      wire << opaque&.delete_prefix('O')
+      "VA 5 f0 #{opaque || 'Oforeign'}\r\nvalue\r\n"
+    end
+
+    with_opaque_server(response, middlewares: [Dalli::OpentelemetryMiddleware]) do |client, server|
+      assert_equal 'value', client.get('wanted', correlate_with_opaques: false)
+
+      manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+      random = manager.instance_variable_get(:@opaque_random)
+
+      assert_instance_of Random, random
+
+      expected = random.dup
+      tokens = Array.new(2) { expected.urlsafe_base64(3, false) }
+      Random.stub(:new, -> { flunk 'must not initialize a PRNG during a rollout read' }) do
+        assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
+        assert_equal 'value', client.get('wanted', correlate_with_opaques: false)
+        assert_equal 'value', client.get('wanted')
+      end
+      assert_same random, manager.instance_variable_get(:@opaque_random)
+      assert manager.options[:correlate_with_opaques]
+      assert_equal [nil, tokens[0], nil, tokens[1]], wire
+      assert_equal Array.new(4) { [1, 'mg'] }, server.requests
+    end
+    spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == 'memcached.read' }
+
+    assert_equal(wire, spans.map { |span| span.attributes['request_opaque'] })
+  end
+
+  it 'eagerly prepares request-only clients without correlating baseline reads or leaking trace metadata' do
+    OTEL_EXPORTER.reset
+    wire = []
+    response = lambda do |line, _connection_id|
+      opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+      wire << opaque&.delete_prefix('O')
+      "VA 5 f0 #{opaque || 'Oforeign'}\r\nvalue\r\n"
+    end
+    settings = { opaque_correlation_request_only: true, middlewares: [Dalli::OpentelemetryMiddleware] }
+
+    with_opaque_server(response, **settings) do |client, server|
+      assert_equal 'value', client.get('wanted')
+
+      manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+      random = manager.instance_variable_get(:@opaque_random)
+
+      assert_instance_of Random, random
+
+      expected = random.dup.urlsafe_base64(3, false)
+      Random.stub(:new, -> { flunk 'must not initialize a PRNG on request opt-in' }) do
+        assert_equal 'value', client.get('wanted', correlate_with_opaques: true)
+        assert_equal 'value', client.get('wanted')
+      end
+      assert_same random, manager.instance_variable_get(:@opaque_random)
+      assert manager.options[:opaque_correlation_request_only]
+      assert_equal [nil, expected, nil], wire
+      assert_equal Array.new(3) { [1, 'mg'] }, server.requests
+    end
+    spans = OTEL_EXPORTER.finished_spans.select { |span| span.name == 'memcached.read' }
+
+    assert_equal(wire, spans.map { |span| span.attributes['request_opaque'] })
+  end
+
+  it 'rejects mismatches only on explicitly opted-in reads in request-only mode' do
+    response = ->(_line, _connection_id) { "VA 5 f0 Owrong\r\nvalue\r\n" }
+    off = {}.freeze
+    on = { correlate_with_opaques: true }.freeze
+
+    with_opaque_server(response, opaque_correlation_request_only: true) do |client, server|
+      assert_equal 'value', client.get('wanted', off)
+      assert_nil client.get('wanted', on)
+      assert_disconnected(client)
+      assert_equal 'value', client.get('wanted', off)
+      assert_equal [[1, 'mg'], [1, 'mg'], [2, 'mg']], server.requests
+    end
+  end
+
+  [false, true].each do |request_only|
+    it "preserves baseline caller opaques until opt-in with request_only=#{request_only}" do
+      wire = []
+      response = lambda do |line, _connection_id|
+        opaques = line.split.drop(2).grep(/\AO/)
+        wire << opaques
+        "VA 5 f0 #{opaques.last}\r\nvalue\r\n"
+      end
+      flags = %w[Ofirst Osecond].freeze
+      baseline = { meta_flags: flags }
+      baseline[:correlate_with_opaques] = false unless request_only
+
+      with_opaque_server(response, opaque_correlation_request_only: request_only) do |client, server|
+        assert_equal 'value', client.get('wanted', baseline.freeze).first
+        assert_equal 'value', client.get('wanted', meta_flags: flags, correlate_with_opaques: true).first
+        assert_equal [%w[Ofirst Osecond], ['Ofirst']], wire
+        assert_equal [[1, 'mg'], [1, 'mg']], server.requests
+      end
+    end
+  end
+
+  [nil, false].each do |client_mode|
+    it "does not activate caller-token validation on a disabled client: #{client_mode.inspect}" do
+      wire = []
+      response = lambda do |line, _connection_id|
+        wire << line.split.drop(2).grep(/\AO/)
+        "VA 5 f0 Oforeign\r\nvalue\r\n"
+      end
+      with_opaque_server(response, correlate_with_opaques: client_mode) do |client, server|
+        result = client.get('wanted', correlate_with_opaques: true, meta_flags: %w[Ofirst Osecond])
+
+        assert_equal 'value', result.first
+        assert_equal [%w[Ofirst Osecond]], wire
+        assert_equal 2, client.incr('counter')
+        assert_equal [[1, 'mg'], [1, 'ma']], server.requests
+      end
+    end
+  end
+
+  it 'keeps concurrent rollout choices local to each request' do
+    wire = []
+    response = lambda do |line, _connection_id|
+      flags = line.split
+      opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+      wire << [flags[1], !opaque.nil?]
+      "VA 5 f0 #{opaque || 'Oforeign'}\r\nvalue\r\n"
+    end
+    with_opaque_server(response, opaque_correlation_request_only: true) do |client, _server|
+      client.alive!
+      workers = Array.new(6) do |index|
+        Thread.new do
+          enabled = index.even?
+
+          20.times do
+            result = enabled ? client.get('on', correlate_with_opaques: true) : client.get('off')
+
+            assert_equal 'value', result
+          end
+        end
+      end
+      workers.each(&:value)
+
+      assert_equal 120, wire.size
+      assert(wire.all? { |key, opaque| opaque == (key == 'on') })
+    end
+  end
+
+  [false, true].each do |enabled|
+    it "forwards request correlation=#{enabled} through fetch and cas!" do
+      settings = { correlate_with_opaques: true, opaque_correlation_request_only: enabled, cache_nils: true }
+      memcached(21_454, '', settings) do |client|
+        client.set('rollout-compound', 'original')
+        manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+        write = manager.method(:write)
+        reads = []
+        capture = lambda do |bytes|
+          reads << bytes if bytes.start_with?('mg ')
+          write.call(bytes)
+        end
+        manager.stub(:write, capture) do
+          assert_equal 'original', client.fetch('rollout-compound', nil, correlate_with_opaques: enabled)
+          result = client.cas!('rollout-compound', 30, correlate_with_opaques: enabled) { 'updated' }
+
+          assert op_cas_succeeds(result)
+        end
+        assert_equal 2, reads.size
+        assert_equal([enabled ? 1 : 0] * 2, reads.map { |line| line.split.drop(2).grep(/\AO/).size })
+        assert_equal 'updated', client.get('rollout-compound')
+      end
+    end
+  end
+
   %i[cas! fetch].each do |operation|
     it "does not overwrite a live key when #{operation} reads a mismatched response" do
       memcached(21_454, '', { raw: true, correlate_with_opaques: true }) do |client|

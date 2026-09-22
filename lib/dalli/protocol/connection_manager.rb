@@ -24,7 +24,8 @@ module Dalli
         socket_failure_delay: 0.1,
         # Set keepalive
         keepalive: true,
-        correlate_with_opaques: false
+        correlate_with_opaques: false,
+        opaque_correlation_request_only: false
       }.freeze
 
       attr_accessor :hostname, :port, :socket_type, :options
