@@ -31,25 +31,17 @@ Enable single-get response validation with `Dalli::Client.new(servers, correlate
 Dalli uses the first caller-supplied `O` token in `meta_flags`, or generates a four-character (24-bit) token if none is supplied.
 It sends that token exactly once and checks the echoed value against it.
 
-Wrong or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
+Mismatched or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
 Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default reads unchanged.
 Caller tokens must be protocol-safe and suitably unique per request; reused tokens cannot detect swaps between those requests.
 Multi-get/pipeline behavior is unchanged.
 
-For an opt-in rollout, also set `opaque_correlation_request_only: true` on the client.
-The PRNG is still initialized at connection setup, but unflagged requests retain their baseline behavior:
+For opt-in, per-request opaque correlation, also set `opaque_correlation_request_only: true` on the client and pass `correlate_with_opaques: true` in request options.  The PRNG is still initialized at connection setup, but unflagged requests retain their baseline behavior:
 
 ```ruby
 client = Dalli::Client.new(servers, correlate_with_opaques: true, opaque_correlation_request_only: true)
 client.get('key')                             # no correlation
 client.get('key', correlate_with_opaques: true) # correlate this read
-```
-
-At 100%, remove the request-only client setting and the request-level flag logic:
-
-```ruby
-client = Dalli::Client.new(servers, correlate_with_opaques: true)
-client.get('key') # correlate by default
 ```
 
 Request-only mode defaults to false. Requests can explicitly opt out with `correlate_with_opaques: false`
