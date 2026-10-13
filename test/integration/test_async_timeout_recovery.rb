@@ -151,7 +151,8 @@ module RecoveryParityHelpers
     client.flush
     client.set('small', 'value')
     client.set('large', 'L' * 700_000)
-    client.set_multi(MULTI_KEYS.take(40).to_h { |key| [key, "#{key}-#{'m' * 3_000}"] }, 0)
+    # Individual sets: a 40 x 3KB set_multi over TLS can stall memcached, and Ruby < 3.4 never times it out.
+    MULTI_KEYS.take(40).each { |key| client.set(key, "#{key}-#{'m' * 3_000}", 0) }
   end
 
   def read_results(client, req)
