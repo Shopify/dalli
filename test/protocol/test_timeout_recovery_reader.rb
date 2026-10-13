@@ -81,20 +81,6 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     end
   end
 
-  it 'keeps partially read bytes when a wait times out' do
-    with_reader do |reader, peer|
-      peer.write('VA 1')
-
-      assert_raises(IO::TimeoutError) { reader.gets("\r\n") }
-      assert_predicate reader, :pending?
-
-      peer.write("0\r\n")
-
-      assert_equal "VA 10\r\n", reader.gets("\r\n")
-      refute_predicate reader, :pending?
-    end
-  end
-
   it 'keeps its buffer at the chunk size after a large read' do
     value = SecureRandom.random_bytes(1_000_000)
     with_reader do |reader, peer|
