@@ -96,14 +96,14 @@ module Dalli
       end
 
       # read_nonblock overwrites the buffer, so unconsumed bytes are set aside and restored
-      # after the read; @offset only moves once the read returns.
+      # after the read; @offset only moves once the read returns. At EOF a socket empties the
+      # buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying old bytes.
       def fill
         partial = @buffer.byteslice(@offset, @buffer.bytesize - @offset) if pending?
         filled = read_chunk
+        @buffer.clear unless filled
         @offset = 0
-        if partial
-          filled ? @buffer.prepend(partial) : @buffer.replace(partial)
-        end
+        @buffer.prepend(partial) if partial
         filled
       end
 
