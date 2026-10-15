@@ -104,6 +104,9 @@ module TimeoutRecoveryReaderFuzz
   # Fault injection and bookkeeping for one reader socket.
   ##
   class Faults
+    # Recent reads and waits, for failure messages.
+    HISTORY = 24
+
     attr_reader :waits, :delivered, :last_data_at
 
     def initialize(rng)
@@ -113,6 +116,7 @@ module TimeoutRecoveryReaderFuzz
       @short = [0.0, 0.2, 0.5].sample(random: rng)
       @starve = [0.0, 0.3, 1.0].sample(random: rng)
       @waits = []
+      @history = []
       @delivered = 0
       mark
     end
@@ -127,16 +131,26 @@ module TimeoutRecoveryReaderFuzz
     end
 
     # The length to request, or the Symbol a spurious EAGAIN would return.
-    def read_length(maxlen)
+    def read_length(sock, maxlen)
       STATS[:large_reads] += 1 if maxlen > CHUNK
       roll = @rng.rand
-      return :wait_readable if roll < @spurious
-      return :wait_writable if roll < @spurious + @writable
+      spurious = spurious_result(sock, roll)
+      return spurious.tap { record(:read, maxlen, :spurious, spurious) } if spurious
 
       roll > 1 - @short ? @rng.rand(1..maxlen) : maxlen
     end
 
-    def received(result)
+    # A TLS socket holding decrypted bytes always returns them, so it never gets a spurious EAGAIN.
+    def spurious_result(sock, roll)
+      return if sock.respond_to?(:pending) && sock.pending.positive?
+      return :wait_readable if roll < @spurious
+
+      :wait_writable if roll < @spurious + @writable
+    end
+
+    def read(maxlen, length)
+      result = yield
+      record(:read, maxlen, length, result.is_a?(String) ? result.bytesize : result.inspect)
       return result unless result.is_a?(String)
 
       @delivered += result.bytesize
@@ -144,14 +158,35 @@ module TimeoutRecoveryReaderFuzz
       result
     end
 
-    # Records the wait and decides whether to report a timeout although the socket is ready.
-    def starve?(sock, event, timeout)
+    # Reports a timeout without waiting when the socket is ready and the roll says the scheduler
+    # resumed the reader late; otherwise waits.
+    def wait(sock, event, timeout)
+      started = TimeoutRecoveryReaderFuzz.now
       @waits << [timeout, Fiber.blocking?, !Fiber.scheduler.nil?]
+      starved = starve?(sock, event, timeout)
+      result = starved ? nil : yield
+      record(event, timeout, starved ? :starved : :waited, result ? :ready : result.inspect,
+             (TimeoutRecoveryReaderFuzz.now - started).round(4))
+      result
+    end
+
+    def history
+      @history.map { |event| event.join(' ') }.join("\n")
+    end
+
+    private
+
+    def starve?(sock, event, timeout)
       return false if timeout.nil? || timeout.zero? || @rng.rand >= @starve
       return false unless Fiber.blocking { IO.instance_method(event).bind_call(sock.to_io, 0) }
 
       STATS[:starved_waits] += 1
       true
+    end
+
+    def record(*event)
+      @history << [(TimeoutRecoveryReaderFuzz.now - @last_data_at).round(4), *event]
+      @history.shift if @history.size > HISTORY
     end
   end
 
@@ -160,18 +195,18 @@ module TimeoutRecoveryReaderFuzz
   ##
   module Hooks
     def read_nonblock(maxlen, buf = nil, exception: true)
-      length = @fuzz_faults.read_length(maxlen)
+      length = @fuzz_faults.read_length(self, maxlen)
       return length if length.is_a?(Symbol)
 
-      @fuzz_faults.received(super(length, buf, exception: exception))
+      @fuzz_faults.read(maxlen, length) { super(length, buf, exception: exception) }
     end
 
     def wait_readable(timeout = nil)
-      @fuzz_faults.starve?(self, :wait_readable, timeout) ? nil : super
+      @fuzz_faults.wait(self, :wait_readable, timeout) { super }
     end
 
     def wait_writable(timeout = nil)
-      @fuzz_faults.starve?(self, :wait_writable, timeout) ? nil : super
+      @fuzz_faults.wait(self, :wait_writable, timeout) { super }
     end
   end
 
@@ -394,10 +429,11 @@ module TimeoutRecoveryReaderFuzz
       timeout = test_case.timeout
       STATS[:timeouts] += 1
       STATS[:max_hang_past_timeout] = [STATS[:max_hang_past_timeout], hang - timeout].max
+      events = "; recent socket events (seconds since data, event, ...):\n#{test_case.faults.history}"
 
-      assert_operator hang, :>=, timeout * 0.9, "#{context}: failed #{hang.round(3)}s after the last byte"
+      assert_operator hang, :>=, timeout * 0.9, "#{context}: failed #{hang.round(3)}s after the last byte#{events}"
       assert_operator hang, :<=, timeout + TIMEOUT_SLACK,
-                      "#{context}: failed #{hang.round(3)}s after the last byte with a #{timeout}s timeout"
+                      "#{context}: failed #{hang.round(3)}s after the last byte with a #{timeout}s timeout#{events}"
     end
 
     # Every pause is shorter than the timeout, but together they outlast it.
@@ -491,7 +527,7 @@ module TimeoutRecoveryReaderFuzz
       test_case.faults.mark
       STATS[:cases] += 1
       unless run_ops(test_case) == :stalled
-        assert_same_bytes(test_case.model.rest, drain(test_case.reader, rng), "#{test_case.label} drain")
+        assert_same_bytes(test_case.model.rest, drain(test_case, rng), "#{test_case.label} drain")
         assert_paused_through(started, test_case.label) if mode == :pauses
       end
 
@@ -508,7 +544,7 @@ module TimeoutRecoveryReaderFuzz
         end
 
         large_read = kind == :read && arg - test_case.buffered >= CHUNK
-        actual = test_case.reader.public_send(kind, arg)
+        actual = read_reporting_history(test_case, kind, arg, context)
         test_case.returned!(actual)
 
         assert_same_bytes(test_case.model.apply(kind, arg), actual, context)
@@ -517,12 +553,20 @@ module TimeoutRecoveryReaderFuzz
       end
     end
 
-    def drain(reader, rng)
+    def drain(test_case, rng)
       rest = String.new(encoding: Encoding::BINARY)
-      while (chunk = reader.read([1, CHUNK, LARGE + 1, 3 * LARGE].sample(random: rng)))
+      size = -> { [1, CHUNK, LARGE + 1, 3 * LARGE].sample(random: rng) }
+      while (chunk = read_reporting_history(test_case, :read, size.call, test_case.label))
         rest << chunk
       end
       rest
+    end
+
+    def read_reporting_history(test_case, kind, arg, context)
+      test_case.reader.public_send(kind, arg)
+    rescue IO::TimeoutError => e
+      flunk "#{context}: unexpected #{e.message}; recent socket events " \
+            "(seconds since data, event, ...):\n#{test_case.faults.history}"
     end
   end
 end
