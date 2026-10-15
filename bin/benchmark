@@ -187,10 +187,12 @@ if %w[all get].include?(bench_target)
 end
 
 # Large-value gets under a fiber scheduler, through the default read path and the
-# exp_async_timeout_recovery reader. GC stays enabled: with the GC suite, the
-# discarded values exhaust memory within a few seconds at the default payload size.
+# exp_async_timeout_recovery reader. GC must run here: the GC suite of earlier targets
+# leaves it disabled, and the discarded values exhaust memory within a few seconds at the
+# default payload size.
 if %w[all async_get].include?(bench_target)
   require 'async'
+  GC.enable
   Sync do
     Benchmark.ips do |x|
       x.config(warmup: bench_warmup, time: bench_time)
