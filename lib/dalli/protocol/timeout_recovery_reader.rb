@@ -8,6 +8,9 @@ module Dalli
     ##
     class TimeoutRecoveryReader
       CHUNK_SIZE = 8192
+      # Most a single large-value read asks for. Bounds the per-connection scratch
+      # buffer at 64 KiB while cutting a 2 MB value from ~257 reads to ~35.
+      LARGE_READ_SIZE = 65_536
 
       def initialize(sock, timeout)
         @sock = sock
@@ -36,7 +39,13 @@ module Dalli
         data = String.new(capacity: count, encoding: Encoding::BINARY)
         data << @buffer.byteslice(@offset, available) if available.positive?
         @offset = @buffer.bytesize
-        append_from_socket(data, count - available)
+        remaining = count - available
+        # Large values bypass the 8 KB line buffer: each read asks the socket for at
+        # most what is still owed, so a value costs a few syscalls rather than one per
+        # CHUNK_SIZE bytes plus a copy out of @buffer, and never reads past its end.
+        return append_directly(data, remaining) if remaining >= CHUNK_SIZE
+
+        append_from_socket(data, remaining)
       end
 
       private
@@ -57,6 +66,33 @@ module Dalli
           remaining -= taken
         end
         data
+      end
+
+      def append_directly(data, remaining)
+        while remaining.positive?
+          chunk = if data.empty?
+                    read_partial(remaining, data)
+                  else
+                    read_partial([remaining, LARGE_READ_SIZE].min, scratch)
+                  end
+          return data.empty? ? nil : data unless chunk
+
+          data << chunk unless chunk.equal?(data)
+          remaining -= chunk.bytesize
+        end
+        data
+      end
+
+      def scratch
+        @scratch ||= String.new(encoding: Encoding::BINARY)
+      end
+
+      # Waits like read_chunk, but reads at most maxlen bytes into outbuf.
+      def read_partial(maxlen, outbuf)
+        while (result = @sock.read_nonblock(maxlen, outbuf, exception: false)).is_a?(Symbol)
+          wait_for(result)
+        end
+        result
       end
 
       # read_nonblock overwrites the buffer, so unconsumed bytes are set aside and restored

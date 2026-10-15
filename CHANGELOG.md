@@ -7,6 +7,9 @@ Unreleased
 - Add experimental per-request `exp_async_timeout_recovery` option: reads wait with explicit deadlines and poll the
   socket once more before timing out, so replies delayed only by a busy fiber scheduler are not discarded. (nherson)
 
+- `exp_async_timeout_recovery` reads values of 8 KB or more straight from the socket in reads of up to 64 KiB
+  instead of through the 8 KB line buffer, cutting a 2 MB get from ~259 to ~37 syscalls. (nherson)
+
 - Add per-request opaque-correlation controls and a client `opaque_correlation_request_only` mode
   for opt-in rollouts, with eager PRNG initialization and unchanged unflagged reads. (mrattle)
 

@@ -95,6 +95,47 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     end
   end
 
+  it 'reads a large value in a few socket reads and stops at its end' do
+    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    value = SecureRandom.random_bytes((chunk * 40) + 3)
+    with_reader do |reader, peer, sock|
+      reads = 0
+      counter = Module.new do
+        define_method(:read_nonblock) do |*args, **kwargs|
+          reads += 1
+          super(*args, **kwargs)
+        end
+      end
+      sock.singleton_class.prepend(counter)
+      # Default UNIX socket buffers (8 KB on macOS) would cap each read regardless of
+      # the reader, so make room for the whole response before writing it.
+      peer.setsockopt(Socket::SOL_SOCKET, Socket::SO_SNDBUF, 1 << 20)
+      sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVBUF, 1 << 20)
+      half = value.bytesize / 2
+      write_in_background(peer, "VA #{value.bytesize}\r\n", value.byteslice(0, half),
+                          value.byteslice(half..), "\r\nEN\r\n").join
+
+      assert_equal "VA #{value.bytesize}\r\n", reader.gets("\r\n")
+      assert_equal value, reader.read(value.bytesize)
+      assert_operator reads, :<, 20
+      assert_equal "\r\n", reader.read(2)
+      assert_equal "EN\r\n", reader.gets("\r\n")
+      assert_nil reader.gets("\r\n")
+    end
+  end
+
+  it 'returns the bytes received when EOF cuts a large value short' do
+    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    value = SecureRandom.random_bytes(chunk * 3)
+    with_reader do |reader, peer|
+      writer = write_in_background(peer, value)
+
+      assert_equal value, reader.read(chunk * 5)
+      assert_nil reader.read(chunk * 5)
+      writer.join
+    end
+  end
+
   it 'allocates one string per buffered line' do
     with_reader do |reader, peer|
       peer.write("HD\r\n" * 101)

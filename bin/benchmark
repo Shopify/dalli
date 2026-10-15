@@ -7,11 +7,13 @@
 # run with:
 # bundle exec bin/benchmark
 # RUBY_YJIT_ENABLE=1 BENCH_TARGET=get bundle exec bin/benchmark
+# BENCH_TARGET=async_get bundle exec bin/benchmark
 require 'bundler/inline'
 require 'json'
 
 gemfile do
   source 'https://rubygems.org'
+  gem 'async'
   gem 'benchmark-ips'
   gem 'logger'
   gem 'opentelemetry-sdk'
@@ -181,6 +183,21 @@ if %w[all get].include?(bench_target)
       end
     end
     x.compare!
+  end
+end
+
+# Large-value gets under a fiber scheduler, through the default read path and the
+# exp_async_timeout_recovery reader. GC stays enabled: with the GC suite, the
+# discarded values exhaust memory within a few seconds at the default payload size.
+if %w[all async_get].include?(bench_target)
+  require 'async'
+  Sync do
+    Benchmark.ips do |x|
+      x.config(warmup: bench_warmup, time: bench_time)
+      x.report('get dalli async') { client.get('key') }
+      x.report('get dalli async timeout recovery') { client.get('key', exp_async_timeout_recovery: true) }
+      x.compare!
+    end
   end
 end
 
