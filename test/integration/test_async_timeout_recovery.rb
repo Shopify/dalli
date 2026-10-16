@@ -203,13 +203,20 @@ module LargeValueHelpers
       @events.reverse_each.find { |kind, bytes| kind == :read && bytes.positive? }&.last
     end
 
-    # Bytes received before each wait that reported a timeout and was followed by a poll that found data.
+    # Bytes received before each wait that reported a timeout after which the reader still found
+    # data: through the poll that follows or, when that poll misses it, the read after the poll.
     def recoveries(timeout)
       received = 0
-      @events.each_cons(2).filter_map do |event, following|
+      @events.each_cons(3).filter_map do |event, poll, after|
         received += event[1] if event.first == :read
-        received if event == [:wait, timeout, false] && following == [:wait, 0, true]
+        received if event == [:wait, timeout, false] && found_data?(poll, after)
       end
+    end
+
+    private
+
+    def found_data?(poll, after)
+      poll == [:wait, 0, true] || (poll == [:wait, 0, false] && after.first == :read && after[1].positive?)
     end
   end
 

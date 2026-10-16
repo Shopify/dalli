@@ -130,11 +130,15 @@ module TimeoutRecoveryReaderFuzz
       @last_data_at = TimeoutRecoveryReaderFuzz.now
     end
 
-    # The length to request, or the Symbol a spurious EAGAIN would return.
+    # The length to request, or the Symbol a spurious EAGAIN would return. The read after a poll
+    # that found nothing is the reader's last check before failing, so it gets no spurious EAGAIN:
+    # that would fail a read whose data is there, which no socket does.
     def read_length(sock, maxlen)
       STATS[:large_reads] += 1 if maxlen > CHUNK
+      last_check = @last_check
+      @last_check = false
       roll = @rng.rand
-      spurious = spurious_result(sock, roll)
+      spurious = spurious_result(sock, roll) unless last_check
       return spurious.tap { record(:read, maxlen, :spurious, spurious) } if spurious
 
       roll > 1 - @short ? @rng.rand(1..maxlen) : maxlen
@@ -165,6 +169,7 @@ module TimeoutRecoveryReaderFuzz
       @waits << [timeout, Fiber.blocking?, !Fiber.scheduler.nil?]
       starved = starve?(sock, event, timeout)
       result = starved ? nil : yield
+      @last_check = timeout&.zero? && !result
       record(event, timeout, starved ? :starved : :waited, result ? :ready : result.inspect,
              (TimeoutRecoveryReaderFuzz.now - started).round(4))
       result

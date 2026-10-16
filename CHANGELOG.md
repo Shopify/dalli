@@ -13,6 +13,9 @@ Unreleased
 - Fix `exp_async_timeout_recovery` replaying the previous reply instead of reporting EOF after a TLS server
   closes the connection cleanly. (nherson)
 
+- Fix `exp_async_timeout_recovery` failing a read whose data is ready when the poll after a timed-out wait
+  misses it, which a zero-timeout poll can do while the thread has a pending interrupt. (nherson)
+
 - Add per-request opaque-correlation controls and a client `opaque_correlation_request_only` mode
   for opt-in rollouts, with eager PRNG initialization and unchanged unflagged reads. (mrattle)
 

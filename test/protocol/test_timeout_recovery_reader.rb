@@ -94,6 +94,19 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     end
   end
 
+  it 'reads data that is ready when the poll after a timed-out wait misses it' do
+    with_reader do |reader, peer, sock|
+      # A zero-timeout poll can report nothing without checking the socket while the thread has a
+      # pending interrupt, such as one from Thread#wakeup or a queue push.
+      sock.define_singleton_method(:wait_readable) do |timeout|
+        peer.write("HD\r\n") if timeout.positive?
+        nil
+      end
+
+      assert_equal "HD\r\n", reader.gets("\r\n")
+    end
+  end
+
   it 'keeps its buffer at the chunk size after a large read' do
     value = SecureRandom.random_bytes(1_000_000)
     with_reader do |reader, peer|

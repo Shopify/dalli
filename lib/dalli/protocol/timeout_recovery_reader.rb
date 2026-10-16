@@ -87,10 +87,13 @@ module Dalli
         @scratch ||= String.new(encoding: Encoding::BINARY)
       end
 
-      # Waits like read_chunk, but reads at most maxlen bytes into outbuf.
+      # Reads at most maxlen bytes into outbuf, waiting while the socket has none; nil at EOF.
       def read_partial(maxlen, outbuf)
+        last_try = false
         while (result = @sock.read_nonblock(maxlen, outbuf, exception: false)).is_a?(Symbol)
-          wait_for(result)
+          raise IO::TimeoutError, "IO timeout after #{@timeout}s" if last_try
+
+          last_try = !wait_for(result)
         end
         result
       end
@@ -100,26 +103,21 @@ module Dalli
       # buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying old bytes.
       def fill
         partial = @buffer.byteslice(@offset, @buffer.bytesize - @offset) if pending?
-        filled = read_chunk
+        filled = !read_partial(CHUNK_SIZE, @buffer).nil?
         @buffer.clear unless filled
         @offset = 0
         @buffer.prepend(partial) if partial
         filled
       end
 
-      # Waits on :wait_readable or :wait_writable, which name the socket method to call.
-      def read_chunk
-        while (result = @sock.read_nonblock(CHUNK_SIZE, @buffer, exception: false)).is_a?(Symbol)
-          wait_for(result)
-        end
-        !result.nil?
-      end
-
+      # Waits on :wait_readable or :wait_writable, which name the socket method to call. After a
+      # wait that times out, polls once outside the fiber scheduler. Returns false when that poll
+      # finds nothing too, and the caller then reads once more before failing: a zero-timeout poll
+      # can report nothing without checking the socket while the thread has a pending interrupt.
       def wait_for(event)
-        return if @sock.public_send(event, @timeout)
-        return if Fiber.blocking { @sock.public_send(event, 0) }
+        return true if @sock.public_send(event, @timeout)
 
-        raise IO::TimeoutError, "IO timeout after #{@timeout}s"
+        Fiber.blocking { @sock.public_send(event, 0) } ? true : false
       end
     end
   end
