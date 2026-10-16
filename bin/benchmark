@@ -13,7 +13,7 @@ require 'json'
 
 gemfile do
   source 'https://rubygems.org'
-  gem 'async'
+  gem 'async', require: false
   gem 'benchmark-ips'
   gem 'logger'
   gem 'opentelemetry-sdk'
@@ -186,23 +186,6 @@ if %w[all get].include?(bench_target)
   end
 end
 
-# Large-value gets under a fiber scheduler, through the default read path and the
-# exp_async_timeout_recovery reader. GC must run here: the GC suite of earlier targets
-# leaves it disabled, and the discarded values exhaust memory within a few seconds at the
-# default payload size.
-if %w[all async_get].include?(bench_target)
-  require 'async'
-  GC.enable
-  Sync do
-    Benchmark.ips do |x|
-      x.config(warmup: bench_warmup, time: bench_time)
-      x.report('get dalli async') { client.get('key') }
-      x.report('get dalli async timeout recovery') { client.get('key', exp_async_timeout_recovery: true) }
-      x.compare!
-    end
-  end
-end
-
 if %w[all get_multi].include?(bench_target)
   Benchmark.ips do |x|
     x.config(warmup: bench_warmup, time: bench_time, suite: suite)
@@ -251,5 +234,22 @@ if %w[all delete_multi].include?(bench_target)
     x.report('delete_multi 100 keys') { client.delete_multi(pairs.keys) }
     x.report('delete 100 keys') { pairs.keys.each { |key| client.delete(key) } }
     x.compare!
+  end
+end
+
+# Large-value gets under a fiber scheduler, through the default read path and the
+# exp_async_timeout_recovery reader. Runs last so the targets above run as they did before
+# it existed. GC must run here: the GC suite of earlier targets leaves it disabled, and the
+# discarded values exhaust memory within a few seconds at the default payload size.
+if %w[all async_get].include?(bench_target)
+  require 'async'
+  GC.enable
+  Sync do
+    Benchmark.ips do |x|
+      x.config(warmup: bench_warmup, time: bench_time)
+      x.report('get dalli async') { client.get('key') }
+      x.report('get dalli async timeout recovery') { client.get('key', exp_async_timeout_recovery: true) }
+      x.compare!
+    end
   end
 end
