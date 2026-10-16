@@ -7,8 +7,22 @@ require 'async' if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.3')
 
 # Replies from a separate process, so they arrive while a fiber in this process holds the thread.
 # A key named "delay<ms>-..." delays its reply; every get writes one byte to #signal on receipt.
+# A key containing "size<n>" gets an n-byte value; with "parts<n>" and "gap<ms>" the value is
+# written in n parts with a pause before each later part. Halfway through each pause, once the
+# client has drained the previous part and is waiting, a byte is written to #signal.
 class DelayedReplyServer
-  SCRIPT = <<~'RUBY'
+  VALUE_OF = <<~'RUBY'
+    def value_of(key)
+      size = key[/size(\d+)/, 1]&.to_i
+      return "value-of-#{key}" unless size
+
+      pattern = "EN\r\nVA 3 k\r\n\0\xFF".b
+      (pattern * ((size / pattern.bytesize) + 1)).byteslice(0, size)
+    end
+  RUBY
+  singleton_class.class_eval(VALUE_OF)
+
+  SCRIPT = VALUE_OF + <<~'RUBY'
     require 'socket'
     listener = UNIXServer.new(ARGV.fetch(0))
     signal = IO.for_fd(3, autoclose: false)
@@ -24,8 +38,19 @@ class DelayedReplyServer
           when 'mg'
             signal.write('.')
             sleep(key[/\Adelay(\d+)ms/, 1].to_i / 1000.0)
-            value = "value-of-#{key}"
-            connection.write("VA #{value.bytesize}#{" k#{key}" if flags.include?('k')}\r\n#{value}\r\n")
+            value = value_of(key)
+            parts = key[/parts(\d+)/, 1]&.to_i || 1
+            part_size = (value.bytesize + parts - 1) / parts
+            first, *rest = Array.new(parts) { |i| value.byteslice(i * part_size, part_size) }
+            connection.write("VA #{value.bytesize}#{" k#{key}" if flags.include?('k')}\r\n", first,
+                             rest.empty? ? "\r\n" : '')
+            pause = key[/gap(\d+)ms/, 1].to_i / 2000.0
+            rest.each_with_index do |part, index|
+              sleep(pause)
+              signal.write('.')
+              sleep(pause)
+              connection.write(part, index == rest.size - 1 ? "\r\n" : '')
+            end
           else raise "Unexpected command: #{command}"
           end
         end
@@ -144,6 +169,106 @@ module AsyncTimeoutRecoveryHelpers
   end
 end
 
+module LargeValueHelpers
+  # More than a UNIX socket buffer holds, so the server's write of a first half returns only once the
+  # client is reading inside the value.
+  LARGE_SIZE = 900_000
+
+  ##
+  # Records reads and waits on a connection's socket.
+  ##
+  class SocketLog
+    def self.now
+      Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    end
+
+    def initialize(sock)
+      events = @events = []
+      sock.singleton_class.prepend(Module.new do
+        define_method(:read_nonblock) do |*args, **kwargs|
+          result = super(*args, **kwargs)
+          events << [:read, result.is_a?(String) ? result.bytesize : 0, SocketLog.now]
+          result
+        end
+
+        define_method(:wait_readable) do |timeout = nil|
+          result = super(timeout)
+          events << [:wait, timeout, result ? true : false]
+          result
+        end
+      end)
+    end
+
+    def last_data_at
+      @events.reverse_each.find { |kind, bytes| kind == :read && bytes.positive? }&.last
+    end
+
+    # Bytes received before each wait that reported a timeout after which the reader still found
+    # data: through the poll that follows or, when that poll misses it, the read after the poll.
+    def recoveries(timeout)
+      received = 0
+      @events.each_cons(3).filter_map do |event, poll, after|
+        received += event[1] if event.first == :read
+        received if event == [:wait, timeout, false] && found_data?(poll, after)
+      end
+    end
+
+    private
+
+    def found_data?(poll, after)
+      poll == [:wait, 0, true] || (poll == [:wait, 0, false] && after.first == :read && after[1].positive?)
+    end
+  end
+
+  def in_scheduler(selector, &)
+    return yield unless selector
+
+    with_selector(selector, &)
+  end
+
+  def assert_reads_through_pauses(client, selector)
+    key = "size#{LARGE_SIZE}-parts6-gap30ms"
+    value = nil
+    duration = in_scheduler(selector) do
+      client.alive!
+      elapsed { value = client.get(key, recover) }
+    end
+
+    assert_equal DelayedReplyServer.value_of(key), value
+    # Five 30ms pauses: none outlasts the timeout, together they do.
+    assert_operator duration, :>, 2 * socket_timeout
+  end
+
+  def assert_fails_within_timeout_of_last_byte(client, selector)
+    error = hang = nil
+    in_scheduler(selector) do
+      client.alive!
+      log = SocketLog.new(connection_manager(client).sock)
+      client.get("size#{LARGE_SIZE}-parts2-gap500ms", recover)
+    rescue Dalli::NetworkError => e
+      error = e
+      hang = SocketLog.now - log.last_data_at
+    end
+
+    assert_kind_of Dalli::NetworkError, error
+    assert_match(/IO::TimeoutError/, error.message)
+    assert_operator hang, :>=, socket_timeout
+    assert_operator hang, :<, socket_timeout + 0.1
+    key = "size#{LARGE_SIZE}-after"
+
+    assert_equal DelayedReplyServer.value_of(key), in_scheduler(selector) { client.get(key, recover) }
+  end
+
+  # A fiber that wakes on the server's second signal, sent while the reader waits inside the value
+  # for its second half, and holds the thread until after that half arrives.
+  def start_busy_fiber_inside_value(task, signal)
+    task.async do
+      2.times { await_signal(signal) }
+      busy
+    end
+  end
+end
+
 module RecoveryParityHelpers
   MULTI_KEYS = (Array.new(40) { |i| "multi-#{i}" } << 'missing').freeze
 
@@ -188,6 +313,7 @@ end
 describe 'exp_async_timeout_recovery' do
   include AsyncTimeoutRecoveryHelpers
   include RecoveryParityHelpers
+  include LargeValueHelpers
 
   describe 'without a fiber scheduler' do
     it 'returns the same results as default reads over TCP' do
@@ -247,6 +373,14 @@ describe 'exp_async_timeout_recovery' do
         assert_equal 'value-of-b', client.get('b', recover)
       end
     end
+
+    it 'reads a large value delivered in pauses that are each shorter than the timeout' do
+      with_delayed_reply_client { |client| assert_reads_through_pauses(client, nil) }
+    end
+
+    it 'fails a large value within one timeout once it stops arriving' do
+      with_delayed_reply_client { |client| assert_fails_within_timeout_of_last_byte(client, nil) }
+    end
   end
 
   AsyncTimeoutRecoveryHelpers::SELECTORS.each do |selector|
@@ -295,6 +429,51 @@ describe 'exp_async_timeout_recovery' do
           assert_kind_of Dalli::NetworkError, error
           assert_match(/IO::TimeoutError/, error.message)
         end
+      end
+
+      it 'keeps reading a large value whose rest arrives while another fiber holds the thread' do
+        with_delayed_reply_client do |client, server|
+          key = "size#{LargeValueHelpers::LARGE_SIZE}-parts2-gap40ms"
+          value = sock = log = nil
+          duration = with_selector(selector) do |task|
+            client.alive!
+            sock = connection_manager(client).sock
+            log = LargeValueHelpers::SocketLog.new(sock)
+            start_busy_fiber_inside_value(task, server.signal)
+            elapsed { value = client.get(key, recover) }
+          end
+          recoveries = log.recoveries(socket_timeout)
+
+          assert_equal DelayedReplyServer.value_of(key), value
+          assert_operator duration, :>, socket_timeout
+          assert_same sock, connection_manager(client).sock
+          assert recoveries.any? { |received| received.between?(100, LargeValueHelpers::LARGE_SIZE) },
+                 "expected a wait inside the value to time out and find data; recovered after #{recoveries} bytes"
+        end
+      end
+
+      it 'fails a large value without the option when another fiber holds the thread inside it' do
+        with_delayed_reply_client do |client, server|
+          error = with_selector(selector) do |task|
+            client.alive!
+            start_busy_fiber_inside_value(task, server.signal)
+            client.get("size#{LargeValueHelpers::LARGE_SIZE}-parts2-gap40ms")
+            nil
+          rescue Dalli::NetworkError => e
+            e
+          end
+
+          assert_kind_of Dalli::NetworkError, error
+          assert_match(/IO::TimeoutError/, error.message)
+        end
+      end
+
+      it 'reads a large value delivered in pauses that are each shorter than the timeout' do
+        with_delayed_reply_client { |client| assert_reads_through_pauses(client, selector) }
+      end
+
+      it 'fails a large value within one timeout once it stops arriving' do
+        with_delayed_reply_client { |client| assert_fails_within_timeout_of_last_byte(client, selector) }
       end
 
       it 'still fails a read when no reply arrives before the timeout' do

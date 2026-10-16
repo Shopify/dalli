@@ -7,11 +7,14 @@
 # run with:
 # bundle exec bin/benchmark
 # RUBY_YJIT_ENABLE=1 BENCH_TARGET=get bundle exec bin/benchmark
+# BENCH_TARGET=async_get bundle exec bin/benchmark (not part of BENCH_TARGET=all)
 require 'bundler/inline'
 require 'json'
 
 gemfile do
   source 'https://rubygems.org'
+  # Only async_get needs it; other runs keep the same gems as before that target existed.
+  gem 'async' if ENV['BENCH_TARGET'] == 'async_get'
   gem 'benchmark-ips'
   gem 'logger'
   gem 'opentelemetry-sdk'
@@ -232,5 +235,18 @@ if %w[all delete_multi].include?(bench_target)
     x.report('delete_multi 100 keys') { client.delete_multi(pairs.keys) }
     x.report('delete 100 keys') { pairs.keys.each { |key| client.delete(key) } }
     x.compare!
+  end
+end
+
+# Large-value gets under a fiber scheduler, through the default read path and the
+# exp_async_timeout_recovery reader. Runs only when selected, so BENCH_TARGET=all is unchanged.
+if bench_target == 'async_get'
+  Sync do
+    Benchmark.ips do |x|
+      x.config(warmup: bench_warmup, time: bench_time)
+      x.report('get dalli async') { client.get('key') }
+      x.report('get dalli async timeout recovery') { client.get('key', exp_async_timeout_recovery: true) }
+      x.compare!
+    end
   end
 end
