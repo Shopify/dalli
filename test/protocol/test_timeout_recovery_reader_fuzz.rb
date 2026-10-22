@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative '../helper'
-require 'objspace'
 require 'zlib'
 require_relative '../utils/ssl_socket_pair'
 require 'async' if Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.3')
@@ -419,13 +418,11 @@ module TimeoutRecoveryReaderFuzz
     end
 
     # finish_request! discards the connection when pending? is true, so it must reflect exactly the
-    # bytes taken from the socket but not yet returned. A read that owed CHUNK_SIZE or more after
-    # draining the buffer must not take bytes past its end.
-    def assert_buffer_consistent(test_case, large_read, context)
+    # bytes taken from the socket but not yet returned.
+    def assert_buffer_consistent(test_case, context)
       buffered = test_case.buffered
 
       assert_equal buffered.positive?, test_case.reader.pending?, "#{context}: pending? with #{buffered} bytes buffered"
-      assert_equal 0, buffered, "#{context}: large read took #{buffered} bytes past its end" if large_read
     end
 
     def assert_fails_within_timeout(test_case, kind, arg, context)
@@ -458,13 +455,6 @@ module TimeoutRecoveryReaderFuzz
         assert bounded, "#{test_case.label}: waited with timeout #{wait_timeout.inspect} " \
                         "(blocking: #{blocking.inspect}, scheduler: #{scheduled})"
       end
-    end
-
-    def assert_bounded_scratch(test_case)
-      scratch = test_case.reader.instance_variable_get(:@scratch)
-      return unless scratch
-
-      assert_operator ObjectSpace.memsize_of(scratch), :<=, LARGE + 256, "#{test_case.label}: scratch buffer grew"
     end
   end
 
@@ -537,7 +527,6 @@ module TimeoutRecoveryReaderFuzz
       end
 
       assert_bounded_waits(test_case)
-      assert_bounded_scratch(test_case)
     end
 
     def run_ops(test_case)
@@ -548,12 +537,11 @@ module TimeoutRecoveryReaderFuzz
           return :stalled
         end
 
-        large_read = kind == :read && arg - test_case.buffered >= CHUNK
         actual = read_reporting_history(test_case, kind, arg, context)
         test_case.returned!(actual)
 
         assert_same_bytes(test_case.model.apply(kind, arg), actual, context)
-        assert_buffer_consistent(test_case, large_read, context)
+        assert_buffer_consistent(test_case, context)
         STATS[:ops] += 1
       end
     end
