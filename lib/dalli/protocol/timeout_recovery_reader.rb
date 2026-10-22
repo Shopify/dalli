@@ -7,16 +7,32 @@ module Dalli
     # expires, polls the socket once outside any fiber scheduler before failing.
     ##
     class TimeoutRecoveryReader
+      # Size of the first reads into the buffer.
       CHUNK_SIZE = 8192
-      # Most a single large-value read asks for. Bounds the per-connection scratch
-      # buffer at 64 KiB while cutting a 2 MB value from ~257 reads to ~35.
+      # Size of every read into the buffer once one CHUNK_SIZE read comes back full, that is once a
+      # reply on this connection outgrows CHUNK_SIZE. A get_multi of 40 × 4 KB values then takes 3
+      # reads instead of 22. The buffer stays at 64 KiB plus any partial line carried over a read.
       LARGE_READ_SIZE = 65_536
+      # Separators for #gets. byteindex with a separator in another encoding than @buffer's
+      # first scans @buffer's coderange, which every fill resets, so it costs a pass over
+      # every chunk read; a binary separator skips that scan.
+      LF = "\n".b.freeze
+      CRLF = "\r\n".b.freeze
 
       def initialize(sock, timeout)
         @sock = sock
         @timeout = timeout
         @buffer = String.new(capacity: CHUNK_SIZE, encoding: Encoding::BINARY)
         @offset = 0
+        @read_size = CHUNK_SIZE
+        # Plain sockets wait before a reply's first read; see read_partial.
+        @wait_before_reply = sock.is_a?(::BasicSocket)
+        @reply_expected = true
+      end
+
+      # Called before a request is written, so the first read of its reply waits first.
+      def expect_reply
+        @reply_expected = true
       end
 
       def pending?
@@ -37,59 +53,59 @@ module Dalli
         return consume(count) if available >= count
 
         data = String.new(capacity: count, encoding: Encoding::BINARY)
-        data << @buffer.byteslice(@offset, available) if available.positive?
-        @offset = @buffer.bytesize
+        append(data, tail) if available.positive?
         remaining = count - available
-        # Large values bypass the 8 KB line buffer: each read asks the socket for at
-        # most what is still owed, so a value costs a few syscalls rather than one per
-        # CHUNK_SIZE bytes plus a copy out of @buffer, and never reads past its end.
-        return append_directly(data, remaining) if remaining >= CHUNK_SIZE
-
-        append_from_socket(data, remaining)
-      end
-
-      private
-
-      def consume(length)
-        data = @buffer.byteslice(@offset, length)
-        @offset += length
-        data
-      end
-
-      def append_from_socket(data, remaining)
         while remaining.positive?
           return data.empty? ? nil : data unless fill
 
           taken = [remaining, @buffer.bytesize].min
-          data << (taken == @buffer.bytesize ? @buffer : @buffer.byteslice(0, taken))
+          append(data, taken == @buffer.bytesize ? @buffer : @buffer.byteslice(0, taken))
           @offset = taken
           remaining -= taken
         end
         data
       end
 
-      def append_directly(data, remaining)
-        while remaining.positive?
-          chunk = if data.empty?
-                    read_partial(remaining, data)
-                  else
-                    read_partial([remaining, LARGE_READ_SIZE].min, scratch)
-                  end
-          return data.empty? ? nil : data unless chunk
+      private
 
-          data << chunk unless chunk.equal?(data)
-          remaining -= chunk.bytesize
-        end
+      def consume(length)
+        return tail if @offset + length == @buffer.bytesize
+
+        data = @buffer.byteslice(@offset, length)
+        @offset += length
         data
       end
 
-      def scratch
-        @scratch ||= String.new(encoding: Encoding::BINARY)
+      # Returns the unconsumed bytes and consumes them. A byteslice that runs to the end of @buffer
+      # shares its memory: the slice would keep the whole buffer alive, and the next fill would copy
+      # the whole buffer before overwriting it. unpack1 copies just the bytes asked for.
+      def tail
+        data = @buffer.unpack1('a*', offset: @offset)
+        @offset = @buffer.bytesize
+        data
+      end
+
+      # String#<< scans the bytes it appends to work out the result's coderange. append_as_bytes
+      # (Ruby 3.4+) skips that scan and, like <<, keeps the capacity data was created with.
+      if String.method_defined?(:append_as_bytes)
+        def append(data, bytes)
+          data.append_as_bytes(bytes)
+        end
+      else
+        def append(data, bytes)
+          data << bytes
+        end
       end
 
       # Reads at most maxlen bytes into outbuf, waiting while the socket has none; nil at EOF.
+      #
+      # A reply's first read comes right after its request is written, so on a plain socket it would
+      # only return :wait_readable; the socket is waited on first instead, the same wait that read
+      # would have led to. OpenSSL can hold decrypted bytes that the socket's readiness doesn't show,
+      # so TLS sockets always read first.
       def read_partial(maxlen, outbuf)
-        last_try = false
+        last_try = @reply_expected && @wait_before_reply && !wait_for(:wait_readable)
+        @reply_expected = false
         while (result = @sock.read_nonblock(maxlen, outbuf, exception: false)).is_a?(Symbol)
           raise IO::TimeoutError, "IO timeout after #{@timeout}s" if last_try
 
@@ -98,12 +114,14 @@ module Dalli
         result
       end
 
-      # read_nonblock overwrites the buffer, so unconsumed bytes are set aside and restored
-      # after the read; @offset only moves once the read returns. At EOF a socket empties the
-      # buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying old bytes.
+      # read_nonblock overwrites the buffer, so unconsumed bytes are set aside (copied, not sliced; see
+      # #tail) and restored after the read; @offset only moves once the read returns. At EOF a socket
+      # empties the buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying
+      # old bytes.
       def fill
-        partial = @buffer.byteslice(@offset, @buffer.bytesize - @offset) if pending?
-        filled = !read_partial(CHUNK_SIZE, @buffer).nil?
+        partial = @buffer.unpack1('a*', offset: @offset) if pending?
+        filled = !read_partial(@read_size, @buffer).nil?
+        @read_size = LARGE_READ_SIZE if @buffer.bytesize == @read_size
         @buffer.clear unless filled
         @offset = 0
         @buffer.prepend(partial) if partial

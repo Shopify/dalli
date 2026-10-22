@@ -25,6 +25,18 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     sock.setsockopt(Socket::SOL_SOCKET, Socket::SO_RCVBUF, 1 << 20)
   end
 
+  # Records what each read_nonblock on sock returns: :data for bytes, otherwise the result itself.
+  def record_reads(sock)
+    results = []
+    recorder = Module.new do
+      define_method(:read_nonblock) do |*args, **kwargs|
+        super(*args, **kwargs).tap { |result| results << (result.is_a?(String) ? :data : result) }
+      end
+    end
+    sock.singleton_class.prepend(recorder)
+    results
+  end
+
   def write_in_background(peer, *chunks)
     Thread.new do
       chunks.each { |chunk| peer.write(chunk) }
@@ -107,7 +119,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     end
   end
 
-  it 'keeps its buffer at the chunk size after a large read' do
+  it 'keeps its buffer at the large read size after a large read' do
     value = SecureRandom.random_bytes(1_000_000)
     with_reader do |reader, peer|
       writer = write_in_background(peer, value, "\r\n")
@@ -117,22 +129,67 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
       writer.join
       buffer = reader.instance_variable_get(:@buffer)
 
-      assert_operator ObjectSpace.memsize_of(buffer), :<=, Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE * 2
+      assert_operator ObjectSpace.memsize_of(buffer), :<=, Dalli::Protocol::TimeoutRecoveryReader::LARGE_READ_SIZE * 2
     end
   end
 
-  it 'reads a large value in a few socket reads and stops at its end' do
+  it 'returns a value that ends at the end of a read without sharing the buffer' do
+    with_reader do |reader, peer|
+      peer.write("VA 1000 k\r\n", 'v' * 1000)
+      sleep(0.01)
+
+      assert_equal "VA 1000 k\r\n", reader.gets("\r\n")
+      value = reader.read(1000)
+      peer.write("\r\n")
+
+      assert_equal "\r\n", reader.read(2)
+      refute_includes ObjectSpace.dump(value), '"shared":true'
+    end
+  end
+
+  it 'reads a reply of many small values in a few socket reads' do
+    values = Array.new(40) { |i| SecureRandom.random_bytes(4096 + i) }
+    reply = values.map { |value| "VA #{value.bytesize} k\r\n#{value}\r\n" }.join.b << "MN\r\n"
+    with_reader do |reader, peer, sock|
+      reads = record_reads(sock)
+      enlarge_buffers(sock, peer)
+      write_in_background(peer, reply).join
+
+      values.each do |value|
+        assert_equal "VA #{value.bytesize} k\r\n", reader.gets("\r\n")
+        assert_equal value, reader.read(value.bytesize)
+        assert_equal "\r\n", reader.read(2)
+      end
+
+      assert_equal "MN\r\n", reader.gets("\r\n")
+      # 8 KB reads would take 21.
+      assert_operator reads.size, :<=, 5
+    end
+  end
+
+  it 'waits for each expected reply before its first read' do
+    with_reader do |reader, peer, sock|
+      reads = record_reads(sock)
+      2.times do
+        reader.expect_reply
+        writer = Thread.new do
+          sleep(0.01)
+          peer.write("HD\r\n")
+        end
+
+        assert_equal "HD\r\n", reader.gets("\r\n")
+        writer.join
+      end
+
+      assert_equal %i[data data], reads
+    end
+  end
+
+  it 'reads a large value in a few socket reads' do
     chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
     value = SecureRandom.random_bytes((chunk * 40) + 3)
     with_reader do |reader, peer, sock|
-      reads = 0
-      counter = Module.new do
-        define_method(:read_nonblock) do |*args, **kwargs|
-          reads += 1
-          super(*args, **kwargs)
-        end
-      end
-      sock.singleton_class.prepend(counter)
+      reads = record_reads(sock)
       enlarge_buffers(sock, peer)
       half = value.bytesize / 2
       write_in_background(peer, "VA #{value.bytesize}\r\n", value.byteslice(0, half),
@@ -140,7 +197,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
 
       assert_equal "VA #{value.bytesize}\r\n", reader.gets("\r\n")
       assert_equal value, reader.read(value.bytesize)
-      assert_operator reads, :<, 20
+      assert_operator reads.size, :<, 20
       assert_equal "\r\n", reader.read(2)
       assert_equal "EN\r\n", reader.gets("\r\n")
       assert_nil reader.gets("\r\n")
@@ -166,10 +223,11 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
       enlarge_buffers(sock, peer)
       peer.write(value.byteslice(0, chunk * 3))
       timed_out = []
+      reads = record_reads(sock)
       # A scheduler that resumes the reader after the deadline reports a timeout even though the
       # rest of the value has arrived by then.
       sock.define_singleton_method(:wait_readable) do |timeout|
-        return super(timeout) if timeout.zero?
+        return super(timeout) if timeout.zero? || reads.empty?
 
         timed_out << timeout
         peer.write(value.byteslice((chunk * 3)..)) if timed_out.one?

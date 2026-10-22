@@ -68,8 +68,9 @@ client.set('key', 'value', nil, exp_async_timeout_recovery: true)
 
 The option defaults to false, and requests without it read exactly as before. A reply that does not arrive still
 fails after `socket_timeout`. Writes are unchanged, and so is the pipelined `get_multi` path used with multiple
-servers or a block. The buffer is about 8 KiB per connection, is allocated only when a request on that connection
-opts in, and is released when the connection closes. The `exp_` prefix marks the option as experimental.
+servers or a block. The buffer is 8 KiB per connection and grows to 64 KiB once a reply on that connection
+outgrows it. It is allocated only when a request on that connection opts in, and is released when the connection
+closes. The `exp_` prefix marks the option as experimental.
 
 ## Development
 

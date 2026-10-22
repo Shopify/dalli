@@ -238,14 +238,24 @@ if %w[all delete_multi].include?(bench_target)
   end
 end
 
-# Large-value gets under a fiber scheduler, through the default read path and the
-# exp_async_timeout_recovery reader. Runs only when selected, so BENCH_TARGET=all is unchanged.
+# Large-value gets and a get_multi of small values under a fiber scheduler, through the default read
+# path and the exp_async_timeout_recovery reader. Runs only when selected, so BENCH_TARGET=all is unchanged.
 if bench_target == 'async_get'
+  small_keys = Array.new(40) { |i| "async_small_#{i}" }
+  small_keys.each { |key| client.set(key, 'B' * 4096) }
   Sync do
     Benchmark.ips do |x|
       x.config(warmup: bench_warmup, time: bench_time)
       x.report('get dalli async') { client.get('key') }
       x.report('get dalli async timeout recovery') { client.get('key', exp_async_timeout_recovery: true) }
+      x.compare!
+    end
+    Benchmark.ips do |x|
+      x.config(warmup: bench_warmup, time: bench_time)
+      x.report('get_multi 40 x 4 KB dalli async') { client.get_multi(small_keys) }
+      x.report('get_multi 40 x 4 KB dalli async timeout recovery') do
+        client.get_multi(small_keys, exp_async_timeout_recovery: true)
+      end
       x.compare!
     end
   end

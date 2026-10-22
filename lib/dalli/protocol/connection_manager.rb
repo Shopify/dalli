@@ -162,6 +162,7 @@ module Dalli
 
         @request_in_progress = true
         @recover_timeouts = recover_timeouts
+        @timeout_recovery_reader&.expect_reply if recover_timeouts
       end
 
       def finish_request!
@@ -190,13 +191,13 @@ module Dalli
       def readline
         return @sock.readline unless @recover_timeouts
 
-        timeout_recovery_reader.gets("\n") || raise(EOFError, 'end of file reached')
+        timeout_recovery_reader.gets(TimeoutRecoveryReader::LF) || raise(EOFError, 'end of file reached')
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
         error_on_request!(e)
       end
 
       def read_line
-        data = @recover_timeouts ? timeout_recovery_reader.gets("\r\n") : @sock.gets("\r\n")
+        data = @recover_timeouts ? timeout_recovery_reader.gets(TimeoutRecoveryReader::CRLF) : @sock.gets("\r\n")
         error_on_request!('EOF in read_line') if data.nil?
         data
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
