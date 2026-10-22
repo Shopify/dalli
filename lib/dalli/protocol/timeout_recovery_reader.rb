@@ -53,10 +53,7 @@ module Dalli
         return consume(count) if available >= count
 
         data = String.new(capacity: count, encoding: Encoding::BINARY)
-        # A byteslice that runs to the end of @buffer shares its memory, and the next fill would then
-        # copy the whole buffer before overwriting it. unpack1 copies just the bytes asked for.
-        append(data, @buffer.unpack1('a*', offset: @offset)) if available.positive?
-        @offset = @buffer.bytesize
+        append(data, tail) if available.positive?
         remaining = count - available
         while remaining.positive?
           return data.empty? ? nil : data unless fill
@@ -72,8 +69,19 @@ module Dalli
       private
 
       def consume(length)
+        return tail if @offset + length == @buffer.bytesize
+
         data = @buffer.byteslice(@offset, length)
         @offset += length
+        data
+      end
+
+      # Returns the unconsumed bytes and consumes them. A byteslice that runs to the end of @buffer
+      # shares its memory: the slice would keep the whole buffer alive, and the next fill would copy
+      # the whole buffer before overwriting it. unpack1 copies just the bytes asked for.
+      def tail
+        data = @buffer.unpack1('a*', offset: @offset)
+        @offset = @buffer.bytesize
         data
       end
 
@@ -106,11 +114,12 @@ module Dalli
         result
       end
 
-      # read_nonblock overwrites the buffer, so unconsumed bytes are set aside and restored
-      # after the read; @offset only moves once the read returns. At EOF a socket empties the
-      # buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying old bytes.
+      # read_nonblock overwrites the buffer, so unconsumed bytes are set aside (copied, not sliced; see
+      # #tail) and restored after the read; @offset only moves once the read returns. At EOF a socket
+      # empties the buffer but OpenSSL leaves it untouched, so it is cleared here to avoid replaying
+      # old bytes.
       def fill
-        partial = @buffer.byteslice(@offset, @buffer.bytesize - @offset) if pending?
+        partial = @buffer.unpack1('a*', offset: @offset) if pending?
         filled = !read_partial(@read_size, @buffer).nil?
         @read_size = LARGE_READ_SIZE if @buffer.bytesize == @read_size
         @buffer.clear unless filled

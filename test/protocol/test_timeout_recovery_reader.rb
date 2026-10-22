@@ -133,6 +133,20 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
     end
   end
 
+  it 'returns a value that ends at the end of a read without sharing the buffer' do
+    with_reader do |reader, peer|
+      peer.write("VA 1000 k\r\n", 'v' * 1000)
+      sleep(0.01)
+
+      assert_equal "VA 1000 k\r\n", reader.gets("\r\n")
+      value = reader.read(1000)
+      peer.write("\r\n")
+
+      assert_equal "\r\n", reader.read(2)
+      refute_includes ObjectSpace.dump(value), '"shared":true'
+    end
+  end
+
   it 'reads a reply of many small values in a few socket reads' do
     values = Array.new(40) { |i| SecureRandom.random_bytes(4096 + i) }
     reply = values.map { |value| "VA #{value.bytesize} k\r\n#{value}\r\n" }.join.b << "MN\r\n"

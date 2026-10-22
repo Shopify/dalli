@@ -521,7 +521,7 @@ module TimeoutRecoveryReaderFuzz
       started = TimeoutRecoveryReaderFuzz.now
       test_case.faults.mark
       STATS[:cases] += 1
-      unless run_ops(test_case) == :stalled
+      unless run_ops(test_case, rng) == :stalled
         assert_same_bytes(test_case.model.rest, drain(test_case, rng), "#{test_case.label} drain")
         assert_paused_through(started, test_case.label) if mode == :pauses
       end
@@ -529,9 +529,10 @@ module TimeoutRecoveryReaderFuzz
       assert_bounded_waits(test_case)
     end
 
-    def run_ops(test_case)
+    def run_ops(test_case, rng)
       test_case.ops.each_with_index do |(kind, arg), index|
         context = "#{test_case.label} op #{index} #{kind}(#{arg.inspect})"
+        expect_reply(test_case, rng)
         if test_case.stalls_before?(kind, arg)
           assert_fails_within_timeout(test_case, kind, arg, context)
           return :stalled
@@ -544,6 +545,15 @@ module TimeoutRecoveryReaderFuzz
         assert_buffer_consistent(test_case, context)
         STATS[:ops] += 1
       end
+    end
+
+    # With nothing buffered, an op can start a new reply, whose first read then waits before reading
+    # (on plain sockets). Marking that at random runs the wait under the injected faults.
+    def expect_reply(test_case, rng)
+      return if test_case.reader.pending? || rng.rand(2).zero?
+
+      test_case.reader.expect_reply
+      STATS[:expected_replies] += 1
     end
 
     def drain(test_case, rng)
