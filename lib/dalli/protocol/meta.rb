@@ -81,8 +81,7 @@ module Dalli
           total_value_bytesize = 0
           pairs.each do |key, raw_value|
             (value, bitflags) = @value_marshaller.store(key, raw_value, options)
-            encoded_key, _base64 = KeyRegularizer.encode(key)
-            encoded_key = @key_manager.validate_key(encoded_key)
+            encoded_key, base64 = KeyRegularizer.encode(key)
 
             value_bytesize = value.bytesize
             total_value_bytesize += value_bytesize
@@ -94,7 +93,7 @@ module Dalli
             # * first chunk uses interpolated values to avoid extra allocation, but << for larger 'value' strings
             # * avoids using the request formatter pattern for single inline builder
             @connection_manager.write(
-              "ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{routing_suffix}\r\n"
+              "ms #{encoded_key} #{value_bytesize} c#{' b' if base64} F#{bitflags} T#{ttl} MS q#{routing_suffix}\r\n"
             )
             @connection_manager.write(value)
             @connection_manager.write(TERMINATOR)
