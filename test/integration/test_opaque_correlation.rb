@@ -4,10 +4,11 @@ require_relative '../helper'
 
 # TCP fixture for queued responses, incomplete bodies, and connection reuse.
 class OpaqueCorrelationServer
-  def initialize(&get_response)
+  def initialize(write_response: nil, &get_response)
     @listener = TCPServer.new('127.0.0.1', 0)
     @requests = Queue.new
     @get_response = get_response
+    @write_response = write_response || method(:echo_write_response)
     @thread = Thread.new { run }
   end
 
@@ -41,14 +42,23 @@ class OpaqueCorrelationServer
     case command
     when 'version' then "VERSION 1.6.41-fake\r\n"
     when 'mg' then @get_response.call(line, connection_id)
-    when 'ma' then "VA 1\r\n2\r\n"
+    when 'ms', 'ma' then @write_response.call(line, connection_id)
     else raise "Unexpected command: #{line.inspect}"
     end
+  end
+
+  # Like memcached, echo the request's O token and return a CAS only when asked for one.
+  def echo_write_response(line, _connection_id)
+    flags = line.split
+    opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+    suffix = opaque ? " #{opaque}" : ''
+    flags.first == 'ma' ? "VA 1#{suffix}\r\n2\r\n" : "HD#{' c7' if flags.include?('c')}#{suffix}\r\n"
   end
 
   def serve(connection, connection_id)
     while (line = connection.gets("\r\n"))
       command = line.split.first
+      connection.read(line.split[2].to_i + 2) if command == 'ms'
       @requests << [connection_id, command] unless command == 'version'
       response = response_for(command, line, connection_id)
       break if response.nil?
@@ -74,12 +84,21 @@ module CorrelationMetricCapture
       yield attributes
     end
   end
+
+  def storage_req(operation, tags = {})
+    (@metric_tags ||= []).push(tags.dup, tags)
+    super do |attributes|
+      attributes = attributes.dup if attributes.frozen?
+      (@metric_attributes ||= []) << attributes
+      yield attributes
+    end
+  end
 end
 
-describe 'single-get opaque correlation' do
-  def with_opaque_server(response, correlate_with_opaques: true, **options)
+describe 'single-key opaque correlation' do
+  def with_opaque_server(response, correlate_with_opaques: true, write_response: nil, **options)
     options[:correlate_with_opaques] = correlate_with_opaques unless correlate_with_opaques.nil?
-    server = OpaqueCorrelationServer.new(&response)
+    server = OpaqueCorrelationServer.new(write_response: write_response, &response)
     client = Dalli::Client.new(server.address, raw: true, socket_timeout: 0.5,
                                                socket_failure_delay: nil, **options)
     # Bound regressions that accidentally drain a rejected body or retry.
@@ -175,6 +194,14 @@ describe 'single-get opaque correlation' do
     end
   end
 
+  # One public operation per write path: arguments before req_options, wire command, echoed result, rejected result.
+  write_operations = [
+    [:set, ['wanted', 'value', nil], 'ms', 7, false],
+    [:append, %w[wanted value], 'ms', true, false],
+    [:prepend, %w[wanted value], 'ms', true, false],
+    [:incr, ['counter', 1, nil, nil], 'ma', 2, nil]
+  ]
+
   modes = [nil, false, true]
   request_modes = [:omitted, nil, false, true]
   modes.product(modes, request_modes).each do |client_mode, request_only, request_mode|
@@ -203,6 +230,33 @@ describe 'single-get opaque correlation' do
           wire.each { |opaque| assert_match(/\AO[A-Za-z0-9_-]{4}\z/, opaque) }
         else
           assert_equal Array.new(5), wire
+        end
+      end
+    end
+
+    it "gates rollout writes with #{label}" do
+      wire = []
+      write_response = lambda do |line, _connection_id|
+        flags = line.split
+        opaque = flags.drop(2).find { |flag| flag.start_with?('O') }
+        wire << opaque
+        flags.first == 'ma' ? "VA 1 #{opaque || 'Oforeign'}\r\n2\r\n" : "HD c7 #{opaque || 'Oforeign'}\r\n"
+      end
+      options = request_mode == :omitted ? nil : { correlate_with_opaques: request_mode }.freeze
+      inherit = request_mode.nil? || request_mode == :omitted
+      enabled = client_mode == true && (inherit ? request_only != true : request_mode)
+      settings = { correlate_with_opaques: client_mode, opaque_correlation_request_only: request_only }
+
+      with_opaque_server(nil, write_response: write_response, **settings) do |client, server|
+        write_operations.each do |operation, args, _command, accepted, _rejected|
+          assert_equal accepted, client.public_send(operation, *args, options)
+        end
+
+        assert_equal(write_operations.map { |_operation, _args, command| [1, command] }, server.requests)
+        if enabled
+          wire.each { |opaque| assert_match(/\AO[A-Za-z0-9_-]{4}\z/, opaque) }
+        else
+          assert_equal Array.new(write_operations.size), wire
         end
       end
     end
@@ -355,25 +409,28 @@ describe 'single-get opaque correlation' do
   end
 
   [false, true].each do |enabled|
-    it "forwards request correlation=#{enabled} through fetch and cas!" do
+    it "forwards request correlation=#{enabled} through fetch and cas! reads and writes" do
       settings = { correlate_with_opaques: true, opaque_correlation_request_only: enabled, cache_nils: true }
       memcached(21_454, '', settings) do |client|
         client.set('rollout-compound', 'original')
         manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
         write = manager.method(:write)
-        reads = []
+        requests = []
         capture = lambda do |bytes|
-          reads << bytes if bytes.start_with?('mg ')
+          requests << bytes if bytes.start_with?('mg ', 'ms ')
           write.call(bytes)
         end
         manager.stub(:write, capture) do
           assert_equal 'original', client.fetch('rollout-compound', nil, correlate_with_opaques: enabled)
+          assert_equal 'filled', client.fetch('rollout-fill', nil, correlate_with_opaques: enabled) { 'filled' }
           result = client.cas!('rollout-compound', 30, correlate_with_opaques: enabled) { 'updated' }
 
           assert op_cas_succeeds(result)
         end
-        assert_equal 2, reads.size
-        assert_equal([enabled ? 1 : 0] * 2, reads.map { |line| line.split.drop(2).grep(/\AO/).size })
+
+        assert_equal(%w[mg mg ms mg ms], requests.map { |line| line[0, 2] })
+        assert_equal([enabled ? 1 : 0] * 5, requests.map { |line| line.split.drop(2).grep(/\AO/).size })
+        assert_equal 'filled', client.get('rollout-fill')
         assert_equal 'updated', client.get('rollout-compound')
       end
     end
@@ -785,6 +842,175 @@ describe 'single-get opaque correlation' do
       assert_equal 'value', client.get('wanted', meta_flags: ['Ocafé']).first
       assert_equal 2, client.incr('counter')
       assert_equal [[1, 'mg'], [1, 'ma']], server.requests
+    end
+  end
+
+  [' Oobsolete', ''].each do |stale_flag|
+    write_operations.each do |operation, args, command, _accepted, rejected|
+      it "rejects a #{stale_flag.empty? ? 'bare' : 'stale'} #{operation} reply and recycles the connection" do
+        write_response = lambda do |line, _connection_id|
+          opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+          [stale_flag, " #{opaque}"].map do |suffix|
+            command == 'ma' ? "VA 1#{suffix}\r\n9\r\n" : "HD c9#{suffix}\r\n"
+          end.join
+        end
+
+        with_opaque_server(nil, write_response: write_response, socket_max_failures: 1) do |client, server|
+          3.times do
+            result = client.public_send(operation, *args)
+
+            assert_operation_miss(result, operation, rejected)
+            assert_disconnected(client)
+          end
+
+          assert_equal [[1, command], [2, command], [3, command]], server.requests
+        end
+      end
+    end
+  end
+
+  it 'rejects a stale incr header without waiting for its counter line' do
+    write_response = lambda do |line, connection_id|
+      opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+      connection_id == 1 ? "VA 1 Oobsolete\r\n" : "VA 1 #{opaque}\r\n2\r\n"
+    end
+
+    with_opaque_server(nil, write_response: write_response) do |client, server|
+      assert_nil client.incr('counter')
+      assert_disconnected(client)
+      assert_equal 2, client.incr('counter')
+      assert_equal [[1, 'ma'], [2, 'ma']], server.requests
+    end
+  end
+
+  it 'keeps real memcached connections open for every correlated write reply code' do
+    memcached_persistent(21_345, '', { raw: true, correlate_with_opaques: true }) do |client|
+      client.delete('opaque-write')
+      client.delete('opaque-counter')
+      server = client.send(:ring).servers.first
+      manager = server.instance_variable_get(:@connection_manager)
+      socket = server.sock
+      write = manager.method(:write)
+      requests = []
+      capture = lambda do |bytes|
+        requests << bytes if bytes.start_with?('ms ', 'ma ')
+        write.call(bytes)
+      end
+
+      manager.stub(:write, capture) do
+        refute client.replace('opaque-write', 'value') # NS
+        refute client.append('opaque-write', 'value') # NS
+        refute client.set_cas('opaque-write', 'value', 1) # NF
+        cas = client.set('opaque-write', 'value') # HD
+
+        assert op_addset_succeeds(cas)
+        refute client.add('opaque-write', 'value') # NS
+        refute client.set_cas('opaque-write', 'value', cas + 1) # EX
+        assert client.append('opaque-write', '>') # HD
+        assert client.prepend('opaque-write', '<') # HD
+        assert_nil client.incr('opaque-counter', 1) # NF
+        assert_equal 5, client.incr('opaque-counter', 1, nil, 5) # VA
+        assert_equal 3, client.decr('opaque-counter', 2) # VA
+      end
+
+      assert_same socket, server.sock
+      assert_equal '<value>', client.get('opaque-write')
+      assert_equal 11, requests.size
+      requests.each { |line| assert_equal 1, line.split.drop(2).grep(/\AO/).size, line }
+    end
+  end
+
+  it 'leaves deletes, quiet blocks, and multi-key writes uncorrelated' do
+    memcached_persistent(21_345, '', { raw: true, correlate_with_opaques: true }) do |client|
+      manager = client.send(:ring).servers.first.instance_variable_get(:@connection_manager)
+      write = manager.method(:write)
+      commands = []
+      capture = lambda do |bytes|
+        commands.concat(bytes.lines.grep(/\Am[sad] /))
+        write.call(bytes)
+      end
+
+      manager.stub(:write, capture) do
+        assert op_addset_succeeds(client.set('uncorrelated-control', 'value'))
+        client.set_multi({ 'uncorrelated-a' => 'a', 'uncorrelated-b' => 'b' }, 0)
+        client.quiet do
+          client.set('uncorrelated-c', 'c')
+          client.append('uncorrelated-c', 'c')
+          client.incr('uncorrelated-counter', 1, nil, 0)
+          client.delete('uncorrelated-a')
+        end
+
+        assert client.delete('uncorrelated-b')
+        refute client.delete_cas('uncorrelated-c', 1)
+        assert_equal 1, client.delete_multi(%w[uncorrelated-c uncorrelated-missing])
+      end
+      correlated = commands.select { |line| line.split.drop(2).grep(/\AO/).any? }
+
+      assert_equal 11, commands.size
+      assert_equal(['ms uncorrelated-control'], correlated.map { |line| line.split.first(2).join(' ') })
+    end
+  end
+
+  write_spans = { set: 'memcached.write', append: 'memcached.append', prepend: 'memcached.prepend',
+                  incr: 'memcached.incr' }
+  write_operations.each do |operation, args, command, accepted, rejected|
+    it "traces and logs #{operation} correlation without failing the span" do
+      OTEL_EXPORTER.reset
+      log = StringIO.new
+      logger = Logger.new(log)
+      logger.level = Logger::WARN
+      sent = []
+      write_response = lambda do |line, _connection_id|
+        opaque = line.split.drop(2).find { |flag| flag.start_with?('O') }
+        sent << opaque.delete_prefix('O')
+        reply = sent.size == 1 ? opaque : 'Oobsolete'
+        command == 'ma' ? "VA 1 #{reply}\r\n2\r\n" : "HD c7 #{reply}\r\n"
+      end
+      options = { write_response: write_response, middlewares: [Dalli::OpentelemetryMiddleware] }
+
+      Dalli.stub(:logger, logger) do
+        with_opaque_server(nil, **options) do |client, _server|
+          assert_equal accepted, client.public_send(operation, *args)
+          result = client.public_send(operation, *args)
+
+          assert_operation_miss(result, operation, rejected)
+          assert_disconnected(client)
+        end
+      end
+      success, failure = OTEL_EXPORTER.finished_spans.select { |span| span.name == write_spans.fetch(operation) }
+      code = command == 'ma' ? 'VA' : 'HD'
+
+      assert_equal(sent, [success, failure].map { |span| span.attributes['request_opaque'] })
+      refute success.attributes.key?('correlation_mismatch')
+      assert_equal 1, failure.attributes['correlation_mismatch']
+      assert_equal 'mismatch', failure.attributes['correlation_failure_reason']
+      assert_equal code, failure.attributes['response_code']
+      assert_equal 'obsolete', failure.attributes['received_opaque']
+      refute_equal OpenTelemetry::Trace::Status::ERROR, failure.status.code
+      assert_equal 1, log.string.scan('event=dalli.response_correlation_mismatch').size
+      assert_includes log.string, "response_code=#{code} reason=mismatch"
+    end
+  end
+
+  [false, true].each do |with_tracing|
+    it "keeps opaque metadata out of write metric inputs, tracing: #{with_tracing}" do
+      write_response = lambda do |line, connection_id|
+        opaque = connection_id == 1 ? 'Owrong' : line.split.drop(2).find { |flag| flag.start_with?('O') }
+        line.start_with?('ma ') ? "VA 1 #{opaque}\r\n2\r\n" : "HD c7 #{opaque}\r\n"
+      end
+      middlewares = [CorrelationMetricCapture]
+      middlewares.unshift(Dalli::OpentelemetryMiddleware) if with_tracing
+
+      with_opaque_server(nil, write_response: write_response, middlewares: middlewares) do |client, _server|
+        results = write_operations.map { |operation, args| client.public_send(operation, *args) }
+        stack = client.send(:ring).servers.first.instance_variable_get(:@middlewares_stack)
+        allowed_tags = %w[keys value_size ttl delta initial db.system]
+
+        assert_equal [false, true, true, 2], results
+        refute_empty stack.metric_tags
+        stack.metric_tags.each { |tags| assert_empty tags.keys - allowed_tags }
+        stack.metric_attributes.each { |attributes| assert_empty attributes }
+      end
     end
   end
 end

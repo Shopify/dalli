@@ -42,6 +42,11 @@ module Dalli
         @connection_manager.generate_opaque
       end
 
+      # Quiet writes suppress success replies, leaving nothing to correlate.
+      def select_write_opaque(options)
+        select_request_opaque(request_options: options) unless quiet?
+      end
+
       def record_request_opaque(opaque)
         @middlewares_stack.record_request_opaque(opaque) if opaque
       end
@@ -407,50 +412,48 @@ module Dalli
         (value, bitflags) = @value_marshaller.store(key, raw_value, options)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
+        opaque = select_write_opaque(options)
         @middlewares_stack.storage_req(
           "memcached.#{mode}",
           { 'keys' => key, 'value_size' => value.bytesize, 'ttl' => ttl }
         ) do
-          req = RequestFormatter.meta_set(
-            key: encoded_key,
-            value: value,
-            bitflags: bitflags,
-            cas: cas,
-            ttl: ttl,
-            mode: mode,
-            quiet: quiet?,
-            base64: base64,
-            **routing_token_kwargs(options)
-          )
+          record_request_opaque(opaque)
+          req = RequestFormatter.meta_set(key: encoded_key, value: value, bitflags: bitflags, cas: cas, ttl: ttl,
+                                          mode: mode, quiet: quiet?, base64: base64, opaque: opaque,
+                                          **routing_token_kwargs(options))
           write(req)
           write(value)
           write(TERMINATOR)
           @connection_manager.flush
 
-          response_processor.meta_set_with_cas unless quiet?
+          response_processor.meta_set_with_cas(expected_opaque: opaque) unless quiet?
         end
       end
 
       def append(key, value, options = nil)
+        opaque = select_write_opaque(options)
         @middlewares_stack.storage_req('memcached.append', { 'keys' => key, 'value_size' => value.bytesize }) do
-          write_append_prepend_req(:append, key, value, nil, nil, options || {})
-          response_processor.meta_set_append_prepend unless quiet?
+          record_request_opaque(opaque)
+          write_append_prepend_req(:append, key, value, nil, nil, options || {}, opaque: opaque)
+          response_processor.meta_set_append_prepend(expected_opaque: opaque) unless quiet?
         end
       end
 
       def prepend(key, value, options = nil)
+        opaque = select_write_opaque(options)
         @middlewares_stack.storage_req('memcached.prepend', { 'keys' => key, 'value_size' => value.bytesize }) do
-          write_append_prepend_req(:prepend, key, value, nil, nil, options || {})
-          response_processor.meta_set_append_prepend unless quiet?
+          record_request_opaque(opaque)
+          write_append_prepend_req(:prepend, key, value, nil, nil, options || {}, opaque: opaque)
+          response_processor.meta_set_append_prepend(expected_opaque: opaque) unless quiet?
         end
       end
 
       # rubocop:disable-next Metrics/ParameterLists
-      def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, options = {})
+      def write_append_prepend_req(mode, key, value, ttl = nil, cas = nil, options = {}, opaque: nil)
         ttl = TtlSanitizer.sanitize(ttl) if ttl
         encoded_key, base64 = KeyRegularizer.encode(key)
         req = RequestFormatter.meta_set(key: encoded_key, value: value, base64: base64,
-                                        cas: cas, ttl: ttl, mode: mode, quiet: quiet?,
+                                        cas: cas, ttl: ttl, mode: mode, quiet: quiet?, opaque: opaque,
                                         **routing_token_kwargs(options))
         write(req)
         write(value)
@@ -485,6 +488,7 @@ module Dalli
       def decr_incr(incr, key, delta, ttl, initial, options = nil)
         ttl = initial ? TtlSanitizer.sanitize(ttl) : nil # Only set a TTL if we want to set a value on miss
         encoded_key, base64 = KeyRegularizer.encode(key)
+        opaque = select_write_opaque(options)
 
         @middlewares_stack.storage_req(
           incr ? 'memcached.incr' : 'memcached.decr',
@@ -495,11 +499,12 @@ module Dalli
             'initial' => initial || 0
           }
         ) do
+          record_request_opaque(opaque)
           write(RequestFormatter.meta_arithmetic(key: encoded_key, delta: delta, initial: initial, incr: incr, ttl: ttl,
-                                                 quiet: quiet?, base64: base64,
+                                                 quiet: quiet?, base64: base64, opaque: opaque,
                                                  **routing_token_kwargs(options)))
           @connection_manager.flush
-          response_processor.decr_incr unless quiet?
+          response_processor.decr_incr(expected_opaque: opaque) unless quiet?
         end
       end
 

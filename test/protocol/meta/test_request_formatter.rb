@@ -107,6 +107,14 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     let(:cas) { rand(500..999) }
     let(:ttl) { rand(500..999) }
 
+    it 'adds the supplied correlation token alongside CAS, TTL, and routing tokens' do
+      assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} C#{cas} T#{ttl} MR Otoken Proute Lhint\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_set(
+                     key: key, value: val, bitflags: bitflags, cas: cas, ttl: ttl, mode: :replace,
+                     opaque: 'token', p_token: 'route', l_token: 'hint'
+                   )
+    end
+
     it 'returns the default (treat as a set, no CAS check) when just passed key, datalen, and bitflags' do
       assert_equal "ms #{key} #{val.bytesize} c F#{bitflags} MS\r\n",
                    Dalli::Protocol::Meta::RequestFormatter.meta_set(key: key, value: val, bitflags: bitflags)
@@ -299,6 +307,14 @@ describe Dalli::Protocol::Meta::RequestFormatter do
     let(:initial) { rand(500..999) }
     let(:cas) { rand(500..999) }
     let(:ttl) { rand(500..999) }
+
+    it 'adds the supplied correlation token alongside routing tokens' do
+      assert_equal "ma #{key} v D#{delta} J#{initial} N#{ttl} MD Otoken Proute\r\n",
+                   Dalli::Protocol::Meta::RequestFormatter.meta_arithmetic(
+                     key: key, delta: delta, initial: initial, ttl: ttl, incr: false,
+                     opaque: 'token', p_token: 'route'
+                   )
+    end
 
     it 'returns the expected string with the default N flag when passed non-nil key, delta, and initial' do
       assert_equal "ma #{key} v D#{delta} J#{initial} N0 MI\r\n",

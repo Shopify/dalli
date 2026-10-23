@@ -27,14 +27,16 @@ The name is a variant of Salvador Dali for his famous painting [The Persistence 
 
 ## Optional response correlation
 
-Enable single-get response validation with `Dalli::Client.new(servers, correlate_with_opaques: true)`.
-Dalli uses the first caller-supplied `O` token in `meta_flags`, or generates a four-character (24-bit) token if none is supplied.
-It sends that token exactly once and checks the echoed value against it.
+Enable single-key response validation with `Dalli::Client.new(servers, correlate_with_opaques: true)`.
+Reads use the first caller-supplied `O` token in `meta_flags`, or generate a four-character (24-bit) token if none is supplied;
+writes always generate one. Dalli sends that token exactly once and checks the echoed value against it.
 
-Mismatched or missing tokens on accepted get replies return a miss and close the connection, without retrying or down-marking.
-Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default reads unchanged.
+Mismatched or missing tokens on accepted replies close the connection, without retrying or down-marking.
+Reads return a miss. `set`, `add`, `replace`, `append`, and `prepend` return `false`, and `incr`/`decr` return `nil`;
+the server may still have applied a rejected write.
+Other protocol errors are unchanged. Omit the option or set it to `false` to leave caller opaques and default requests unchanged.
 Caller tokens must be protocol-safe and suitably unique per request; reused tokens cannot detect swaps between those requests.
-Multi-get/pipeline behavior is unchanged.
+Deletes, `quiet`/`multi` blocks, and multi-key operations such as `get_multi`, `set_multi`, and `delete_multi` are unchanged.
 
 For opt-in, per-request opaque correlation, also set `opaque_correlation_request_only: true` on the client and pass `correlate_with_opaques: true` in request options.  The PRNG is still initialized at connection setup, but unflagged requests retain their baseline behavior:
 
@@ -42,13 +44,14 @@ For opt-in, per-request opaque correlation, also set `opaque_correlation_request
 client = Dalli::Client.new(servers, correlate_with_opaques: true, opaque_correlation_request_only: true)
 client.get('key')                             # no correlation
 client.get('key', correlate_with_opaques: true) # correlate this read
+client.set('key', 'value', nil, correlate_with_opaques: true) # correlate this write
 ```
 
 Request-only mode defaults to false. Requests can explicitly opt out with `correlate_with_opaques: false`
 in either mode, but cannot enable correlation when the client option is false or omitted.
 An omitted or `nil` request option inherits the client mode.
-Request options do not mutate client configuration. They also apply to `gat`, CAS reads,
-`get_with_status`, `touch`, and the reads made by `fetch`/`cas!`.
+Request options do not mutate client configuration. They also apply to `gat`, CAS reads, `get_with_status`, `touch`,
+`add`, `replace`, `append`, `prepend`, `incr`, `decr`, and the reads and writes made by `fetch`/`cas`/`cas!`.
 
 ## Timeout recovery under fiber schedulers
 
