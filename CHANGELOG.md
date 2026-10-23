@@ -4,6 +4,11 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Extend opt-in opaque correlation to single-key writes: `set`, `add`, `replace`, `append`, `prepend`, `incr`,
+  `decr`, and the writes made by `fetch`/`cas`/`cas!`. Rejected replies return `false` (`nil` for `incr`/`decr`) and
+  recycle the connection, with the same log and trace diagnostics as reads. Deletes, quiet blocks, and multi-key
+  writes are unchanged. (mrattle)
+
 - Read all non-pipelined responses through `Dalli::Protocol::BufferedReader`: reads wait with explicit deadlines and
   poll the socket once more before timing out, so replies delayed only by a busy fiber scheduler are not discarded.
   The reader holds one buffer per connection that grows from 8 KiB to 64 KiB once a reply outgrows it, reads up to

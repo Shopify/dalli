@@ -93,15 +93,17 @@ module Dalli
           end
         end
 
-        def meta_set_with_cas
+        def meta_set_with_cas(expected_opaque: nil)
           tokens = error_on_unexpected!([HD, NS, NF, EX])
+          return false unless verify_opaque!(tokens, expected_opaque)
           return false unless tokens.first == HD
 
           cas_from_tokens(tokens)
         end
 
-        def meta_set_append_prepend
+        def meta_set_append_prepend(expected_opaque: nil)
           tokens = error_on_unexpected!([HD, NS, NF, EX])
+          return false unless verify_opaque!(tokens, expected_opaque)
           return false unless tokens.first == HD
 
           true
@@ -112,8 +114,9 @@ module Dalli
           tokens.first == HD
         end
 
-        def decr_incr
+        def decr_incr(expected_opaque: nil)
           tokens = error_on_unexpected!([VA, NF, NS, EX])
+          return nil unless verify_opaque!(tokens, expected_opaque)
           return false if [NS, EX].include?(tokens.first)
           return nil if tokens.first == NF
 

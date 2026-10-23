@@ -29,8 +29,10 @@ module Dalli
     # - :namespace - prepend each key with this value to provide simple namespacing.
     # - :failover - if a server is down, look for and store values on another server in the ring.  Default: true.
     # - :threadsafe - ensure that only one thread is actively using a socket at a time. Default: true.
-    # - :correlate_with_opaques - validate single-get replies against the first caller O token, or a generated token.
-    #                           Defaults to false; an enabled client can opt individual reads out of correlation.
+    # - :correlate_with_opaques - validate single-key get and write replies against a request O token: a read's first
+    #                           caller O token in meta_flags, or a generated token. Deletes, quiet blocks, and
+    #                           multi-key operations are not correlated. Defaults to false; an enabled client can opt
+    #                           individual requests out of correlation.
     # - :opaque_correlation_request_only - require per-request opt-in on a correlation-enabled client.
     #                                     Defaults to false; does not change eager PRNG initialization.
     # - :expires_in - default TTL in seconds if you do not pass TTL as a parameter to an individual operation, defaults

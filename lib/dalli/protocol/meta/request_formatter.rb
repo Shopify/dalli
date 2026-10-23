@@ -36,7 +36,7 @@ module Dalli
         end
 
         def self.meta_set(key:, value:, bitflags: nil, cas: nil, ttl: nil, mode: :set, base64: false, quiet: false,
-                          p_token: nil, l_token: nil)
+                          opaque: nil, p_token: nil, l_token: nil)
           cmd = "ms #{key} #{value.bytesize}"
           cmd << ' c' if !quiet && !%i[append prepend].include?(mode)
           cmd << ' b' if base64
@@ -45,6 +45,7 @@ module Dalli
           cmd << " T#{ttl}" if ttl
           cmd << " M#{mode_to_token(mode)}"
           cmd << ' q' if quiet
+          cmd << " O#{opaque}" if opaque
           cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd << TERMINATOR
         end
@@ -66,7 +67,7 @@ module Dalli
         end
 
         def self.meta_arithmetic(key:, delta:, initial:, incr: true, cas: nil, ttl: nil, base64: false, quiet: false,
-                                 p_token: nil, l_token: nil)
+                                 opaque: nil, p_token: nil, l_token: nil)
           cmd = "ma #{key} v"
           cmd << ' b' if base64
           cmd << " D#{delta}" if delta
@@ -76,6 +77,7 @@ module Dalli
           cmd << cas_string(cas)
           cmd << ' q' if quiet
           cmd << " M#{incr ? 'I' : 'D'}"
+          cmd << " O#{opaque}" if opaque
           cmd << routing_tokens(p_token: p_token, l_token: l_token)
           cmd + TERMINATOR
         end

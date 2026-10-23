@@ -13,7 +13,7 @@ module Dalli
       yield attributes
     end
 
-    # Diagnostic hooks run synchronously in retrieve_req, under the server lock when threadsafe.
+    # Diagnostic hooks run synchronously in retrieve_req and storage_req, under the server lock when threadsafe.
     # With threadsafe: false, callers must provide exclusive client access.
     def record_request_opaque(_opaque); end
 

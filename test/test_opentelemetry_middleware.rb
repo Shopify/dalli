@@ -4,53 +4,55 @@ require_relative 'helper'
 require 'dalli/opentelemetry_middleware'
 
 describe 'OpenTelemetry middleware' do
-  it 'keeps opaque metadata private and attaches it to the owning single-get span' do
-    OTEL_EXPORTER.reset
-    middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
-    tags = { 'keys' => 'key' }
-    shared_attributes = nil
-    middleware.retrieve_req('retrieval', tags) do |attributes|
-      shared_attributes = attributes
-      middleware.record_request_opaque('expected123')
-      Dalli::OpentelemetryMiddleware::TRACER.in_span('child') do
-        middleware.correlation_failure('correlation_mismatch' => 1, 'received_opaque' => 'received123')
-      end
-      attributes['miss_count'] = 1
-    end
-    retrieval = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'retrieval' }
-    child = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'child' }
-
-    assert_equal({ 'keys' => 'key', 'db.system' => 'memcached' }, tags)
-    assert_equal({ 'miss_count' => 1 }, shared_attributes)
-    assert_equal 'expected123', retrieval.attributes['request_opaque']
-    assert_equal 'received123', retrieval.attributes['received_opaque']
-    assert_equal 1, retrieval.attributes['correlation_mismatch']
-    refute child.attributes.key?('correlation_mismatch')
-  end
-
-  it 'does not apply trace metadata outside its retrieval scope, including after an interruption' do
-    OTEL_EXPORTER.reset
-    middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
-    cancellation = Exception.new('cancelled retrieval')
-    error = assert_raises(Exception) do
-      middleware.retrieve_req('interrupted') do |attributes|
-        attributes['partial_count'] = 1
+  %i[retrieve_req storage_req].each do |hook|
+    it "keeps opaque metadata private and attaches it to the owning #{hook} span" do
+      OTEL_EXPORTER.reset
+      middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+      tags = { 'keys' => 'key' }
+      shared_attributes = nil
+      middleware.public_send(hook, 'request', tags) do |attributes|
+        shared_attributes = attributes
         middleware.record_request_opaque('expected123')
-        raise cancellation
+        Dalli::OpentelemetryMiddleware::TRACER.in_span('child') do
+          middleware.correlation_failure('correlation_mismatch' => 1, 'received_opaque' => 'received123')
+        end
+        attributes['miss_count'] = 1
       end
-    end
-    Dalli::OpentelemetryMiddleware::TRACER.in_span('unrelated') do
-      middleware.record_request_opaque('ignored')
-      middleware.correlation_failure('correlation_mismatch' => 1)
-    end
-    interrupted = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'interrupted' }
-    unrelated = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'unrelated' }
+      request = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'request' }
+      child = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'child' }
 
-    assert_same cancellation, error
-    refute interrupted.attributes.key?('request_opaque')
-    refute interrupted.attributes.key?('partial_count')
-    refute unrelated.attributes.key?('request_opaque')
-    refute unrelated.attributes.key?('correlation_mismatch')
+      assert_equal({ 'keys' => 'key', 'db.system' => 'memcached' }, tags)
+      assert_equal({ 'miss_count' => 1 }, shared_attributes)
+      assert_equal 'expected123', request.attributes['request_opaque']
+      assert_equal 'received123', request.attributes['received_opaque']
+      assert_equal 1, request.attributes['correlation_mismatch']
+      refute child.attributes.key?('correlation_mismatch')
+    end
+
+    it "does not apply trace metadata outside its #{hook} scope, including after an interruption" do
+      OTEL_EXPORTER.reset
+      middleware = Dalli::Middlewares.new.extend(Dalli::OpentelemetryMiddleware)
+      cancellation = Exception.new('cancelled request')
+      error = assert_raises(Exception) do
+        middleware.public_send(hook, 'interrupted') do |attributes|
+          attributes['partial_count'] = 1
+          middleware.record_request_opaque('expected123')
+          raise cancellation
+        end
+      end
+      Dalli::OpentelemetryMiddleware::TRACER.in_span('unrelated') do
+        middleware.record_request_opaque('ignored')
+        middleware.correlation_failure('correlation_mismatch' => 1)
+      end
+      interrupted = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'interrupted' }
+      unrelated = OTEL_EXPORTER.finished_spans.find { |span| span.name == 'unrelated' }
+
+      assert_same cancellation, error
+      refute interrupted.attributes.key?('request_opaque')
+      refute interrupted.attributes.key?('partial_count')
+      refute unrelated.attributes.key?('request_opaque')
+      refute unrelated.attributes.key?('correlation_mismatch')
+    end
   end
 
   it 'restores private trace metadata after nested instrumentation' do

@@ -71,6 +71,49 @@ describe Dalli::Protocol::Meta::ResponseProcessor do
     end
   end
 
+  write_parsers = {
+    meta_set_with_cas: [%w[HD NS EX NF], false],
+    meta_set_append_prepend: [%w[HD NS EX NF], false],
+    decr_incr: [%w[VA NF NS EX], nil]
+  }
+  [' Owrong-token', ' O', ''].each do |opaque_flag|
+    write_parsers.each do |method_name, (codes, rejected)|
+      codes.each do |code|
+        it "rejects #{method_name} #{code} replies with opaque #{opaque_flag.inspect} without reading a body" do
+          body = code == 'VA' ? "12\r\n" : ''
+          io = ResponseProcessorTestIO.new("#{code}#{' 2' if code == 'VA'}#{opaque_flag}\r\n", body)
+
+          result = processor_for(io).public_send(method_name, expected_opaque: 'expected-token')
+          received = opaque_flag.empty? ? nil : opaque_flag.strip[1..]
+
+          rejected.nil? ? assert_nil(result) : assert_equal(rejected, result)
+
+          assert_equal [['expected-token', received, code]], correlation_failures
+          assert_equal body, io.read_line.to_s, 'an uncorrelated counter line must not be consumed'
+        end
+      end
+    end
+  end
+
+  {
+    meta_set_with_cas: { 'HD c7' => 7, 'NS' => false, 'EX' => false, 'NF' => false },
+    meta_set_append_prepend: { 'HD' => true, 'NS' => false, 'EX' => false, 'NF' => false },
+    decr_incr: { 'VA 2' => 12, 'NF' => nil, 'NS' => false, 'EX' => false }
+  }.each do |method_name, replies|
+    replies.each do |header, expected|
+      it "parses #{method_name} #{header.split.first} replies carrying the expected opaque" do
+        io = ResponseProcessorTestIO.new("#{header} Oexpected-token\r\n", header.start_with?('VA') ? "12\r\n" : '')
+
+        result = processor_for(io).public_send(method_name, expected_opaque: 'expected-token')
+
+        expected.nil? ? assert_nil(result) : assert_equal(expected, result)
+
+        assert_empty correlation_failures
+        assert_nil io.read_line
+      end
+    end
+  end
+
   it 'extracts opaque strings and returns nil only when the flag is absent' do
     processor = processor_for(nil)
 
