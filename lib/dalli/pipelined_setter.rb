@@ -5,8 +5,9 @@ module Dalli
   # Contains logic for the pipelined sets implemented by the client.
   ##
   class PipelinedSetter
-    def initialize(ring)
+    def initialize(ring, key_manager)
       @ring = ring
+      @key_manager = key_manager
     end
 
     ##
@@ -27,7 +28,8 @@ module Dalli
       # Note: groups_for_keys(pairs.keys) is slow, so we avoid it.
       raise 'not yet implemented' unless @ring.servers.length == 1
 
-      @ring.servers.first.request(:write_multi_storage_req, pairs, ttl, req_options)
+      validated_pairs = pairs.transform_keys { |key| @key_manager.validate_key(key.to_s) }
+      @ring.servers.first.request(:write_multi_storage_req, validated_pairs, ttl, req_options)
     rescue RetryableNetworkError => e
       Dalli.logger.debug { e.inspect }
       Dalli.logger.debug { 'retrying pipelined set because of timeout' }

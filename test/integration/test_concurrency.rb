@@ -51,8 +51,7 @@ describe 'concurrent behavior' do
 
   it 'supports multithreaded access for single server optimized' do
     memcached_persistent do |_cache, port|
-      # NOTE: we have a bug with set multi and a namespace  namespace: 'some:namspace' fails
-      cache = Dalli::Client.new("localhost:#{port}", raw: true)
+      cache = Dalli::Client.new("localhost:#{port}", raw: true, namespace: 'some:namspace')
       cache.close
       cache.flush
       workers = []

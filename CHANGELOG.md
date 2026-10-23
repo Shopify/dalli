@@ -4,6 +4,10 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Fix single-server `set_multi` storing keys that need base64 (whitespace or non-ASCII) under their base64 text,
+  where reads never find them, and raising `NoMethodError` for non-String keys. It now validates keys (`to_s`,
+  namespace, truncation) before encoding, like every other operation. (mrattle)
+
 - Read all non-pipelined responses through `Dalli::Protocol::BufferedReader`: reads wait with explicit deadlines and
   poll the socket once more before timing out, so replies delayed only by a busy fiber scheduler are not discarded.
   The reader holds one buffer per connection that grows from 8 KiB to 64 KiB once a reply outgrows it, reads up to

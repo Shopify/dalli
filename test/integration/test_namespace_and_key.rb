@@ -89,4 +89,41 @@ describe 'Namespace and key behavior' do
       assert_equal(1, dc.get(('x' * 251).to_s))
     end
   end
+
+  # Single-server rings take the pipelined set_multi path; larger rings fall back to quiet sets.
+  def with_ring(server_count, namespace)
+    memcached_persistent do |_, first_port|
+      memcached_persistent(21_355) do |_, second_port|
+        servers = ["localhost:#{first_port}", "localhost:#{second_port}"].first(server_count)
+        dc = Dalli::Client.new(servers, namespace: namespace, raw: true)
+        dc.flush
+        yield dc
+      ensure
+        dc&.close
+      end
+    end
+  end
+
+  [1, 2].product([nil, 'some:namspace']).each do |server_count, namespace|
+    it "set_multi keys match get and get_multi (#{server_count} servers, namespace #{namespace.inspect})" do
+      with_ring(server_count, namespace) do |dc|
+        pairs = { 'plain' => 'a', 'has space' => 'b', "tab\tkey" => 'c', 'naïve' => 'd', 'ключ' => 'e' }
+        dc.set_multi(pairs, 60)
+
+        assert_equal pairs, dc.get_multi(pairs.keys)
+        pairs.each { |key, value| assert_equal value, dc.get(key), key }
+      end
+    end
+  end
+
+  [1, 2].each do |server_count|
+    it "set_multi accepts the non-String keys set accepts (#{server_count} servers)" do
+      with_ring(server_count, nil) do |dc|
+        dc.set_multi({ sym: 'a', 42 => 'b' }, 60)
+
+        assert_equal 'a', dc.get(:sym)
+        assert_equal 'b', dc.get(42)
+      end
+    end
+  end
 end
