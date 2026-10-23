@@ -44,7 +44,7 @@ module Dalli
 
         begin
           request_local_completed = false
-          @connection_manager.start_request!(recover_timeouts: async_timeout_recovery?(args.last))
+          @connection_manager.start_request!
           response = send(opkey, *args)
 
           # pipelined_get emit query but doesn't read the response(s)
@@ -282,10 +282,6 @@ module Dalli
         return false unless opts.is_a?(Hash)
 
         opts[:cache_nils] ? true : false
-      end
-
-      def async_timeout_recovery?(opts)
-        opts.is_a?(Hash) && opts[:exp_async_timeout_recovery] == true
       end
 
       def connect

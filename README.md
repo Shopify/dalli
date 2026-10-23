@@ -50,27 +50,18 @@ An omitted or `nil` request option inherits the client mode.
 Request options do not mutate client configuration. They also apply to `gat`, CAS reads,
 `get_with_status`, `touch`, and the reads made by `fetch`/`cas!`.
 
-## Experimental: timeout recovery under fiber schedulers
+## Timeout recovery under fiber schedulers
 
 Under a fiber scheduler, `socket_timeout` is enforced by a scheduler timer that starts when a read begins to wait.
 If another fiber keeps the thread busy past that deadline, a scheduler can run the expired timer before it delivers
-the readiness of a reply that has already arrived. The read then fails, the connection is closed, and the reply is lost.
+the readiness of a reply that has already arrived. The read would then fail, the connection would be closed, and
+the reply would be lost.
 
-Pass `exp_async_timeout_recovery: true` in request options to read that request's response through a
-connection-local buffer with an explicit deadline on each wait. When a wait expires, Dalli polls the socket once
-more, outside the scheduler, before it reports a timeout:
-
-```ruby
-client.get('key', exp_async_timeout_recovery: true)
-client.get_multi('a', 'b', exp_async_timeout_recovery: true)
-client.set('key', 'value', nil, exp_async_timeout_recovery: true)
-```
-
-The option defaults to false, and requests without it read exactly as before. A reply that does not arrive still
-fails after `socket_timeout`. Writes are unchanged, and so is the pipelined `get_multi` path used with multiple
-servers or a block. The buffer is 8 KiB per connection and grows to 64 KiB once a reply on that connection
-outgrows it. It is allocated only when a request on that connection opts in, and is released when the connection
-closes. The `exp_` prefix marks the option as experimental.
+Dalli reads responses through a connection-local buffer with an explicit deadline on each wait. When a wait
+expires, Dalli polls the socket once more, outside the scheduler, before it reports a timeout. A reply that does not
+arrive still fails after `socket_timeout`. Writes are unchanged, and so is the pipelined `get_multi` path used with
+multiple servers or a block. The buffer is 8 KiB per connection and grows to 64 KiB once a reply on that connection
+outgrows it. It is allocated on a connection's first read and released when the connection closes.
 
 ## Development
 

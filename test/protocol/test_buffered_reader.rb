@@ -4,10 +4,10 @@ require_relative '../helper'
 require 'objspace'
 require_relative '../utils/ssl_socket_pair'
 
-describe Dalli::Protocol::TimeoutRecoveryReader do
+describe Dalli::Protocol::BufferedReader do
   def with_reader(timeout: 0.05)
     sock, peer = UNIXSocket.pair
-    yield Dalli::Protocol::TimeoutRecoveryReader.new(sock, timeout), peer, sock
+    yield Dalli::Protocol::BufferedReader.new(sock, timeout), peer, sock
   ensure
     sock&.close
     peer&.close unless peer&.closed?
@@ -45,7 +45,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'reads lines and values that cross chunk boundaries' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     lines = Array.new(2_000) { |i| "VA #{i} k#{'x' * (i % 97)}\r\n" }
     value = SecureRandom.random_bytes((chunk * 3) + 17)
     with_reader do |reader, peer|
@@ -129,7 +129,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
       writer.join
       buffer = reader.instance_variable_get(:@buffer)
 
-      assert_operator ObjectSpace.memsize_of(buffer), :<=, Dalli::Protocol::TimeoutRecoveryReader::LARGE_READ_SIZE * 2
+      assert_operator ObjectSpace.memsize_of(buffer), :<=, Dalli::Protocol::BufferedReader::LARGE_READ_SIZE * 2
     end
   end
 
@@ -186,7 +186,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'reads a large value in a few socket reads' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     value = SecureRandom.random_bytes((chunk * 40) + 3)
     with_reader do |reader, peer, sock|
       reads = record_reads(sock)
@@ -205,7 +205,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'returns the bytes received when EOF cuts a large value short' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     value = SecureRandom.random_bytes(chunk * 3)
     with_reader do |reader, peer|
       writer = write_in_background(peer, value)
@@ -217,7 +217,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'keeps reading a large value when a wait in the middle of it reports a timeout while data is ready' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     value = SecureRandom.random_bytes(chunk * 8)
     with_reader(timeout: 0.05) do |reader, peer, sock|
       enlarge_buffers(sock, peer)
@@ -240,7 +240,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'fails within one timeout once a large value stops arriving' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     with_reader(timeout: 0.2) do |reader, peer, sock|
       enlarge_buffers(sock, peer)
       peer.write(SecureRandom.random_bytes(chunk * 3))
@@ -253,7 +253,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
   end
 
   it 'gives each wait a full timeout while a large value arrives in pauses' do
-    chunk = Dalli::Protocol::TimeoutRecoveryReader::CHUNK_SIZE
+    chunk = Dalli::Protocol::BufferedReader::CHUNK_SIZE
     parts = Array.new(6) { SecureRandom.random_bytes(chunk * 2) }
     with_reader(timeout: 0.1) do |reader, peer|
       writer = Thread.new do
@@ -271,7 +271,7 @@ describe Dalli::Protocol::TimeoutRecoveryReader do
 
   it 'returns nil at EOF instead of replaying earlier bytes when a TLS peer closes' do
     sock, peer = SSLSocketPair.open
-    reader = Dalli::Protocol::TimeoutRecoveryReader.new(sock, 0.05)
+    reader = Dalli::Protocol::BufferedReader.new(sock, 0.05)
     peer.write("HD\r\n")
     peer.close
 

@@ -82,8 +82,7 @@ class DelayedReplyServer
   end
 end
 
-module AsyncTimeoutRecoveryHelpers
-  RECOVER = { exp_async_timeout_recovery: true }.freeze
+module TimeoutRecoveryHelpers
   SOCKET_TIMEOUT = 0.05
   BUSY_DURATION = 0.15
   WAKE_PATHS = %i[io_readiness ready_queue timer].freeze
@@ -93,10 +92,6 @@ module AsyncTimeoutRecoveryHelpers
     else
       [].freeze
     end
-
-  def recover
-    RECOVER
-  end
 
   def socket_timeout
     SOCKET_TIMEOUT
@@ -231,7 +226,7 @@ module LargeValueHelpers
     value = nil
     duration = in_scheduler(selector) do
       client.alive!
-      elapsed { value = client.get(key, recover) }
+      elapsed { value = client.get(key) }
     end
 
     assert_equal DelayedReplyServer.value_of(key), value
@@ -244,7 +239,7 @@ module LargeValueHelpers
     in_scheduler(selector) do
       client.alive!
       log = SocketLog.new(connection_manager(client).sock)
-      client.get("size#{LARGE_SIZE}-parts2-gap500ms", recover)
+      client.get("size#{LARGE_SIZE}-parts2-gap500ms")
     rescue Dalli::NetworkError => e
       error = e
       hang = SocketLog.now - log.last_data_at
@@ -256,7 +251,7 @@ module LargeValueHelpers
     assert_operator hang, :<, socket_timeout + 0.1
     key = "size#{LARGE_SIZE}-after"
 
-    assert_equal DelayedReplyServer.value_of(key), in_scheduler(selector) { client.get(key, recover) }
+    assert_equal DelayedReplyServer.value_of(key), in_scheduler(selector) { client.get(key) }
   end
 
   # A fiber that wakes on the server's second signal, sent while the reader waits inside the value
@@ -269,96 +264,31 @@ module LargeValueHelpers
   end
 end
 
-module RecoveryParityHelpers
-  MULTI_KEYS = (Array.new(40) { |i| "multi-#{i}" } << 'missing').freeze
-
-  def store_fixtures(client)
-    client.flush
-    client.set('small', 'value')
-    client.set('large', 'L' * 700_000)
-    # Individual sets: a 40 x 3KB set_multi over TLS can stall memcached, and Ruby < 3.4 never times it out.
-    MULTI_KEYS.take(40).each { |key| client.set(key, "#{key}-#{'m' * 3_000}", 0) }
-  end
-
-  def read_results(client, req)
-    [
-      client.get('small', req), client.get('missing', req), client.get('large', req),
-      client.get_multi(*MULTI_KEYS, **req),
-      client.get_multi_with_status('small', 'missing', **req).transform_values(&:value),
-      client.get_with_status('small', req).value, client.get_cas('small', req).first,
-      client.gat('small', 60, req), client.touch('small', 60, req)
-    ]
-  end
-
-  def write_results(client, req)
-    [
-      client.fetch('fetched', nil, req) { 'computed' },
-      client.incr('counter', 2, nil, 10, req), client.incr('counter', 2, nil, 10, req),
-      client.set('small', 'changed', nil, req).is_a?(Integer), client.get('small', req),
-      client.delete('small', req), client.get('small', req)
-    ]
-  end
-
-  def assert_same_results(client)
-    store_fixtures(client)
-    expected = read_results(client, {}) + write_results(client, {})
-    store_fixtures(client)
-    sock = connection_manager(client).sock
-
-    assert_equal expected, read_results(client, recover) + write_results(client, recover)
-    assert_same sock, connection_manager(client).sock
-  end
-end
-
-describe 'exp_async_timeout_recovery' do
-  include AsyncTimeoutRecoveryHelpers
-  include RecoveryParityHelpers
+describe 'read timeout recovery' do
+  include TimeoutRecoveryHelpers
   include LargeValueHelpers
 
   describe 'without a fiber scheduler' do
-    it 'returns the same results as default reads over TCP' do
-      memcached_persistent(21_345, '', { raw: true, compress: false }) { |client| assert_same_results(client) }
-    end
-
-    it 'returns the same results as default reads over a UNIX socket' do
-      memcached_persistent(MemcachedManager::UNIX_SOCKET_PATH, '', { raw: true, compress: false }) do |client|
-        assert_same_results(client)
-      end
-    end
-
-    it 'returns the same results as default reads over SSL' do
+    it 'reads small, large, and multi-get values over SSL on one connection' do
       memcached_ssl_persistent do |_, port|
         client = Dalli::Client.new("localhost:#{port}", ssl_context: CertificateGenerator.ssl_context,
                                                         raw: true, compress: false)
+        multi = Array.new(40) { |i| ["multi-#{i}", "multi-#{i}-#{'m' * 3_000}"] }.to_h
+        client.set('small', 'value')
+        client.set('large', 'L' * 700_000)
+        # Individual sets: a 40 x 3KB set_multi over TLS can stall memcached, and Ruby < 3.4 never times it out.
+        multi.each { |key, value| client.set(key, value) }
+        sock = connection_manager(client).sock
 
-        assert_same_results(client)
+        2.times do
+          assert_equal 'value', client.get('small')
+          assert_nil client.get('missing')
+          assert_equal 'L' * 700_000, client.get('large')
+          assert_equal multi, client.get_multi(*multi.keys, 'missing')
+        end
+        assert_same sock, connection_manager(client).sock
       ensure
         client&.close
-      end
-    end
-
-    it 'shares a connection with default reads' do
-      memcached_persistent(21_345, '', { raw: true, compress: false }) do |client|
-        store_fixtures(client)
-        sock = connection_manager(client).sock
-        20.times do |i|
-          req = i.even? ? recover : {}
-
-          assert_equal 'L' * 700_000, client.get('large', req)
-          assert_equal 40, client.get_multi(*RecoveryParityHelpers::MULTI_KEYS, **req).size
-        end
-
-        assert_same sock, connection_manager(client).sock
-      end
-    end
-
-    it 'does not allocate a reader for requests that do not opt in' do
-      memcached_persistent(21_345, '', { raw: true, compress: false }) do |client|
-        store_fixtures(client)
-        read_results(client, {})
-        write_results(client, {})
-
-        assert_nil connection_manager(client).instance_variable_get(:@timeout_recovery_reader)
       end
     end
 
@@ -366,11 +296,11 @@ describe 'exp_async_timeout_recovery' do
       with_delayed_reply_client do |client|
         client.alive!
         duration = elapsed do
-          assert_error(Dalli::NetworkError, /IO::TimeoutError/) { client.get('delay300ms', recover) }
+          assert_error(Dalli::NetworkError, /IO::TimeoutError/) { client.get('delay300ms') }
         end
 
         assert_operator duration, :<, 0.3
-        assert_equal 'value-of-b', client.get('b', recover)
+        assert_equal 'value-of-b', client.get('b')
       end
     end
 
@@ -383,9 +313,9 @@ describe 'exp_async_timeout_recovery' do
     end
   end
 
-  AsyncTimeoutRecoveryHelpers::SELECTORS.each do |selector|
+  TimeoutRecoveryHelpers::SELECTORS.each do |selector|
     describe "under Async with the #{selector} selector" do
-      AsyncTimeoutRecoveryHelpers::WAKE_PATHS.each do |wake|
+      TimeoutRecoveryHelpers::WAKE_PATHS.each do |wake|
         it "returns a reply that arrives while a fiber woken by #{wake} holds the thread" do
           with_delayed_reply_client do |client, server|
             value = sock = nil
@@ -393,7 +323,7 @@ describe 'exp_async_timeout_recovery' do
               client.alive!
               sock = connection_manager(client).sock
               start_busy_fiber(task, wake, server.signal)
-              elapsed { value = client.get('delay20ms-a', recover) }
+              elapsed { value = client.get('delay20ms-a') }
             end
 
             assert_equal 'value-of-delay20ms-a', value
@@ -408,26 +338,10 @@ describe 'exp_async_timeout_recovery' do
           values = with_selector(selector) do |task|
             client.alive!
             start_busy_fiber(task, :io_readiness, server.signal)
-            client.get_multi('delay20ms-a', 'b', **recover)
+            client.get_multi('delay20ms-a', 'b')
           end
 
           assert_equal({ 'delay20ms-a' => 'value-of-delay20ms-a', 'b' => 'value-of-b' }, values)
-        end
-      end
-
-      it 'fails without the option when a fiber woken by io_readiness holds the thread' do
-        with_delayed_reply_client do |client, server|
-          error = with_selector(selector) do |task|
-            client.alive!
-            start_busy_fiber(task, :io_readiness, server.signal)
-            client.get('delay20ms-a')
-            nil
-          rescue Dalli::NetworkError => e
-            e
-          end
-
-          assert_kind_of Dalli::NetworkError, error
-          assert_match(/IO::TimeoutError/, error.message)
         end
       end
 
@@ -440,7 +354,7 @@ describe 'exp_async_timeout_recovery' do
             sock = connection_manager(client).sock
             log = LargeValueHelpers::SocketLog.new(sock)
             start_busy_fiber_inside_value(task, server.signal)
-            elapsed { value = client.get(key, recover) }
+            elapsed { value = client.get(key) }
           end
           recoveries = log.recoveries(socket_timeout)
 
@@ -449,22 +363,6 @@ describe 'exp_async_timeout_recovery' do
           assert_same sock, connection_manager(client).sock
           assert recoveries.any? { |received| received.between?(100, LargeValueHelpers::LARGE_SIZE) },
                  "expected a wait inside the value to time out and find data; recovered after #{recoveries} bytes"
-        end
-      end
-
-      it 'fails a large value without the option when another fiber holds the thread inside it' do
-        with_delayed_reply_client do |client, server|
-          error = with_selector(selector) do |task|
-            client.alive!
-            start_busy_fiber_inside_value(task, server.signal)
-            client.get("size#{LargeValueHelpers::LARGE_SIZE}-parts2-gap40ms")
-            nil
-          rescue Dalli::NetworkError => e
-            e
-          end
-
-          assert_kind_of Dalli::NetworkError, error
-          assert_match(/IO::TimeoutError/, error.message)
         end
       end
 
@@ -482,7 +380,7 @@ describe 'exp_async_timeout_recovery' do
           duration = with_selector(selector) do
             client.alive!
             elapsed do
-              client.get('delay300ms', recover)
+              client.get('delay300ms')
             rescue Dalli::NetworkError => e
               error = e
             end
@@ -497,21 +395,15 @@ describe 'exp_async_timeout_recovery' do
         with_delayed_reply_client do |client|
           state = with_selector(selector) do |task|
             client.alive!
-            reader = task.async { client.get('delay500ms', recover) }
+            reader = task.async { client.get('delay500ms') }
             sleep(0.01)
             reader.stop
             reader.wait
             manager = connection_manager(client)
-            [manager.connected?, manager.request_in_progress?, client.get('b', recover)]
+            [manager.connected?, manager.request_in_progress?, client.get('b')]
           end
 
           assert_equal [false, false, 'value-of-b'], state
-        end
-      end
-
-      it 'returns the same results as default reads' do
-        memcached_persistent(21_345, '', { raw: true, compress: false }) do |client|
-          with_selector(selector) { assert_same_results(client) }
         end
       end
     end
