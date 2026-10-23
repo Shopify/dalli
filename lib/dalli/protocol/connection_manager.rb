@@ -41,8 +41,7 @@ module Dalli
         @sock = nil
         @pid = nil
         @opaque_random = nil
-        @recover_timeouts = false
-        @timeout_recovery_reader = nil
+        @reader = nil
 
         reset_down_info
       end
@@ -144,7 +143,7 @@ module Dalli
           @sock = nil
           @pid = nil
           @opaque_random = nil
-          @timeout_recovery_reader = nil
+          @reader = nil
           abort_request!
         end
       end
@@ -157,20 +156,18 @@ module Dalli
         @request_in_progress
       end
 
-      def start_request!(recover_timeouts: false)
+      def start_request!
         raise '[Dalli] Request already in progress. This may be a bug in Dalli.' if @request_in_progress
 
         @request_in_progress = true
-        @recover_timeouts = recover_timeouts
-        @timeout_recovery_reader&.expect_reply if recover_timeouts
+        @reader&.expect_reply
       end
 
       def finish_request!
         raise '[Dalli] No request in progress. This may be a bug in Dalli.' unless @request_in_progress
 
         @request_in_progress = false
-        @recover_timeouts = false
-        discard = @discard_after_request || @timeout_recovery_reader&.pending?
+        discard = @discard_after_request || @reader&.pending?
         @discard_after_request = false
         close if discard
       end
@@ -185,19 +182,16 @@ module Dalli
       def abort_request!
         @request_in_progress = false
         @discard_after_request = false
-        @recover_timeouts = false
       end
 
       def readline
-        return @sock.readline unless @recover_timeouts
-
-        timeout_recovery_reader.gets(TimeoutRecoveryReader::LF) || raise(EOFError, 'end of file reached')
+        reader.gets(BufferedReader::LF) || raise(EOFError, 'end of file reached')
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
         error_on_request!(e)
       end
 
       def read_line
-        data = @recover_timeouts ? timeout_recovery_reader.gets(TimeoutRecoveryReader::CRLF) : @sock.gets("\r\n")
+        data = reader.gets(BufferedReader::CRLF)
         error_on_request!('EOF in read_line') if data.nil?
         data
       rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e
@@ -223,7 +217,8 @@ module Dalli
       end
 
       # Non-blocking read.  Here to support the operation
-      # of the get_multi operation
+      # of the get_multi operation. It reads the socket directly: finish_request! closes a
+      # connection whose reader still holds bytes, so the reader never has any to skip here.
       def read_nonblock
         @sock.read_available
       end
@@ -318,14 +313,14 @@ module Dalli
       # A short blocking read means EOF; read/read_exact route it through
       # error_on_request! to close the dirty socket and apply the retry policy.
       def read_bytes(count)
-        buffer = @recover_timeouts ? timeout_recovery_reader.read(count) : @sock.read(count)
+        buffer = reader.read(count)
         return buffer if buffer && buffer.bytesize == count
 
         raise EOFError, "EOF reading #{count} bytes; received #{buffer ? buffer.bytesize : 0}"
       end
 
-      def timeout_recovery_reader
-        @timeout_recovery_reader ||= TimeoutRecoveryReader.new(@sock, socket_timeout)
+      def reader
+        @reader ||= BufferedReader.new(@sock, socket_timeout)
       end
     end
   end

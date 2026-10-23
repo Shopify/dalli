@@ -6,7 +6,7 @@ module Dalli
     # Buffered response reader that waits with explicit deadlines and, when a wait
     # expires, polls the socket once outside any fiber scheduler before failing.
     ##
-    class TimeoutRecoveryReader
+    class BufferedReader
       # Size of the first reads into the buffer.
       CHUNK_SIZE = 8192
       # Size of every read into the buffer once one CHUNK_SIZE read comes back full, that is once a

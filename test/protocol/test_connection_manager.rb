@@ -2,10 +2,9 @@
 
 require_relative '../helper'
 
-# IO#read(maxlen) on a blocking socket returns exactly maxlen bytes unless the
-# stream hits EOF, where it returns a shorter (non-nil) buffer or nil. This
-# models that contract deterministically: one queued result per read call, so we
-# can exercise the full read and the premature-EOF cases without a real socket.
+# Reads go through Dalli::Protocol::BufferedReader, which calls read_nonblock. This models that
+# contract deterministically: one queued result per read call, and nil (EOF) once the queue is
+# empty, so we can exercise the full read and the premature-EOF cases without a real socket.
 class ContractReadSocket
   attr_reader :read_calls
   attr_accessor :sync
@@ -16,9 +15,10 @@ class ContractReadSocket
     @closed = false
   end
 
-  def read(count)
-    @read_calls << count
-    @chunks.shift
+  def read_nonblock(maxlen, outbuf, **)
+    @read_calls << maxlen
+    chunk = @chunks.shift
+    chunk && outbuf.replace(chunk)
   end
 
   def close
@@ -225,7 +225,7 @@ describe Dalli::Protocol::ConnectionManager do
 
     assert_equal "a\x00\xFFz".b, result
     assert_equal Encoding::BINARY, result.encoding
-    assert_equal [4], socket.read_calls
+    assert_equal 1, socket.read_calls.size
     # #read shares the same fill semantics (both delegate to read_bytes).
     assert_equal 'xyz', connection_manager_with_socket(ContractReadSocket.new('xyz')).read(3)
   end
