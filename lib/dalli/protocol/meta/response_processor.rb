@@ -221,8 +221,7 @@ module Dalli
           buf.split(TERMINATOR, 2).first
         end
 
-        def error_on_unexpected!(expected_codes)
-          line = read_line
+        def error_on_unexpected!(expected_codes, line = read_line)
           tokens = line&.split || []
 
           return tokens if expected_codes.include?(tokens.first)

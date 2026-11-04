@@ -129,7 +129,11 @@ module Dalli
           terminator_length = TERMINATOR.length
           while (line = @connection_manager.readline)
             break if line == TERMINATOR || line[0, 2] == 'MN'
-            next unless line[0, 3] == 'VA '
+
+            unless line[0, 3] == 'VA '
+              response_processor.error_on_unexpected!([ResponseProcessor::EN], line.chomp)
+              next
+            end
 
             # VA value_length flags key
             tokens = line.split
