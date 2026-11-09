@@ -5,12 +5,14 @@ module Dalli
     class Meta
       ##
       # The meta protocol requires that keys be ASCII only, so Unicode keys are
-      # not supported.  In addition, the use of whitespace in the key is not
-      # allowed.
+      # not supported.  In addition, the use of whitespace or NUL bytes in the
+      # key is not allowed.
       # memcached supports the use of base64 hashes for keys containing
-      # whitespace or non-ASCII characters, provided the 'b' flag is included in the request.
+      # whitespace, NUL, or non-ASCII characters, provided the 'b' flag is
+      # included in the request.
       class KeyRegularizer
-        WHITESPACE = /\s/
+        # Ruby's \s does not match NUL, so include it explicitly.
+        WHITESPACE = /[\s\0]/
 
         def self.encode(key)
           return [key, false] if key.ascii_only? && !WHITESPACE.match(key)

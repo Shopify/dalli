@@ -70,6 +70,23 @@ describe 'Namespace and key behavior' do
     end
   end
 
+  it 'allows NUL bytes in keys' do
+    memcached_persistent do |dc|
+      key = "a\0b"
+      dc.set key, 'nul'
+
+      assert_equal 'nul', dc.get(key)
+      assert_nil dc.get('a')
+      assert_equal({ key => 'nul' }, dc.get_multi(key, 'missing'))
+
+      dc.set "\0", 2
+
+      assert_equal 2, dc.get("\0")
+      assert dc.delete(key)
+      assert_nil dc.get(key)
+    end
+  end
+
   it 'does not allow blanks for keys' do
     memcached_persistent do |dc|
       assert_raises ArgumentError do

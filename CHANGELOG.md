@@ -4,6 +4,9 @@ Dalli Changelog
 Unreleased
 ==========
 
+- Base64-encode keys containing NUL bytes, as is already done for whitespace and non-ASCII keys. Previously a NUL
+  in a key was sent raw and split or broke the command at memcached. Keys are decoded back on `get_multi`.
+
 - Read all non-pipelined responses through `Dalli::Protocol::BufferedReader`: reads wait with explicit deadlines and
   poll the socket once more before timing out, so replies delayed only by a busy fiber scheduler are not discarded.
   The reader holds one buffer per connection that grows from 8 KiB to 64 KiB once a reply outgrows it, reads up to
