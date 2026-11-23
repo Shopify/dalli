@@ -1,0 +1,5 @@
+# Context for the model: .security/deepsec/<project>.md.
+projects:
+  dalli:
+    ignore: ["test/**", "bin/**", "scripts/**"]
+    matchers: [deepsec/matchers-dalli.json]
