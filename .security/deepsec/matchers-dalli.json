@@ -1,0 +1,659 @@
+[
+  {
+    "version": 1,
+    "slug": "dalli-meta-wire-command-formatting",
+    "description": "Meta protocol command lines built by string interpolation (keys, caller meta_flags, arithmetic values, stats args, pipelined fast paths) where CR/LF or extra tokens can desynchronize the wire stream.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/protocol/meta/request_formatter.rb",
+      "lib/dalli/protocol/meta.rb"
+    ],
+    "patterns": [
+      {
+        "source": "cmd = \"m[gsad] #\\{key\\}",
+        "flags": "m",
+        "label": "key interpolated into meta command"
+      },
+      {
+        "source": "cmd << \" #\\{meta_flags\\.join\\(' '\\)\\}\"",
+        "flags": "m",
+        "label": "caller meta_flags joined into command"
+      },
+      {
+        "source": "cmd << \" [DJ]#\\{(?:delta|initial)\\}\"",
+        "flags": "m",
+        "label": "arithmetic delta/initial interpolated into command"
+      },
+      {
+        "source": "cmd << \" #\\{arg\\}\" if arg",
+        "flags": "m",
+        "label": "stats argument interpolated"
+      },
+      {
+        "source": "\"m[gs] #\\{encoded_key\\}",
+        "flags": "m",
+        "label": "pipelined/fast-path command with regularized key written directly"
+      }
+    ],
+    "examples": [
+      "          cmd = \"mg #{key}\"",
+      "          cmd = \"md #{key}\"",
+      "          cmd = \"ma #{key} v\"",
+      "          cmd << \" #{meta_flags.join(' ')}\" if meta_flags && !meta_flags.empty?",
+      "          cmd << \" D#{delta}\" if delta",
+      "          cmd << \" J#{initial}\" if initial",
+      "          cmd << \" #{arg}\" if arg",
+      "              \"ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{routing_suffix}\\r\\n\"",
+      "        @connection_manager.write(\"mg #{encoded_key}#{' b' if base64} #{post_get_req}\")",
+      "            write(opaque ? \"mg #{encoded_key} v O#{opaque}\\r\\n\" : \"mg #{encoded_key} v\\r\\n\")"
+    ],
+    "closesSurfaceIds": ["meta-wire-command-interpolation"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-value-deserialization",
+    "description": "Value pipeline that inflates and unmarshals bytes read from memcached: FLAG_SERIALIZED/FLAG_COMPRESSED bitflag guards, serializer.load and compressor decompression sinks.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/protocol/value_serializer.rb",
+      "lib/dalli/protocol/value_compressor.rb",
+      "lib/dalli/protocol/value_marshaller.rb",
+      "lib/dalli/compressor.rb"
+    ],
+    "patterns": [
+      {
+        "source": "FLAG_SERIALIZED = ",
+        "flags": "m",
+        "label": "serialized bitflag gate"
+      },
+      {
+        "source": "FLAG_COMPRESSED = ",
+        "flags": "m",
+        "label": "compressed bitflag gate"
+      },
+      {
+        "source": "bitflags\\.anybits\\?\\(FLAG_(?:SERIALIZED|COMPRESSED)\\)",
+        "flags": "m",
+        "label": "bitflag check guarding deserialization/decompression"
+      },
+      {
+        "source": "serializer\\.load\\(value\\)",
+        "flags": "m",
+        "label": "unmarshals cached bytes"
+      },
+      {
+        "source": "compressor\\.decompress\\(value\\)",
+        "flags": "m",
+        "label": "decompresses cached bytes"
+      },
+      {
+        "source": "Zlib::Inflate\\.inflate\\(data\\)",
+        "flags": "m",
+        "label": "raw inflate of remote data"
+      },
+      {
+        "source": "Zlib::GzipReader\\.new\\(io\\)\\.read",
+        "flags": "m",
+        "label": "gzip inflate of remote data"
+      },
+      {
+        "source": "def retrieve\\(value, (?:bit)?flags\\)",
+        "flags": "m",
+        "label": "retrieve entry points"
+      }
+    ],
+    "examples": [
+      "      FLAG_SERIALIZED = 0x1",
+      "      FLAG_COMPRESSED = 0x2",
+      "        serialized = bitflags.anybits?(FLAG_SERIALIZED)",
+      "        compressed = bitflags.anybits?(FLAG_COMPRESSED)",
+      "            serializer.load(value)",
+      "        compressed ? compressor.decompress(value) : value",
+      "      Zlib::Inflate.inflate(data)",
+      "      Zlib::GzipReader.new(io).read",
+      "      def retrieve(value, bitflags)",
+      "      def retrieve(value, flags)"
+    ],
+    "closesSurfaceIds": ["value-deserialization-pipeline"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-response-framing",
+    "description": "Response framing and request correlation: server-declared lengths read into buffers, opaque verification, and connection discard when a response cannot be trusted.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/protocol/meta/response_processor.rb",
+      "lib/dalli/protocol/meta.rb",
+      "lib/dalli/protocol/buffered_reader.rb",
+      "lib/dalli/protocol/response_buffer.rb",
+      "lib/dalli/protocol/connection_manager.rb",
+      "lib/dalli/protocol/base.rb",
+      "lib/dalli/protocol.rb"
+    ],
+    "patterns": [
+      {
+        "source": "read_data\\(tokens\\[1\\]\\.to_i\\)",
+        "flags": "m",
+        "label": "server-declared value length read"
+      },
+      {
+        "source": "read_exact\\(tokens\\[1\\]\\.to_i\\)",
+        "flags": "m",
+        "label": "server-declared exact read"
+      },
+      {
+        "source": "discard_after_request!",
+        "flags": "m",
+        "label": "connection discard on correlation failure"
+      },
+      {
+        "source": "def verify_opaque!\\(tokens, expected_opaque\\)",
+        "flags": "m",
+        "label": "opaque correlation check"
+      },
+      {
+        "source": "def (?:read|read_bytes)\\(count\\)",
+        "flags": "m",
+        "label": "buffered/socket read entry point"
+      },
+      {
+        "source": "read_nonblock\\(maxlen, outbuf, exception: false\\)",
+        "flags": "m",
+        "label": "non-blocking socket fill"
+      },
+      {
+        "source": "@buffer\\.byteslice\\(bytes_to_advance",
+        "flags": "m",
+        "label": "buffer advance by declared size"
+      },
+      {
+        "source": "TIMEOUT_ERRORS",
+        "flags": "m",
+        "label": "timeout classes that decide connection teardown"
+      }
+    ],
+    "examples": [
+      "          value, bitflag = @value_marshaller.retrieve(read_data(tokens[1].to_i), bitflags_from_tokens(tokens))",
+      "            value = @connection_manager.read_exact(tokens[1].to_i)",
+      "        @connection_manager.discard_after_request!",
+      "        def verify_opaque!(tokens, expected_opaque)",
+      "      def read(count)",
+      "      def read_bytes(count)",
+      "        while (result = @sock.read_nonblock(maxlen, outbuf, exception: false)).is_a?(Symbol)",
+      "        @buffer = @buffer.byteslice(bytes_to_advance..-1)",
+      "    TIMEOUT_ERRORS =",
+      "      rescue SystemCallError, *TIMEOUT_ERRORS, EOFError => e"
+    ],
+    "closesSurfaceIds": ["response-framing-and-correlation"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-rack-session-store",
+    "description": "Rack session store keying and lifecycle: session keys derived from private_id, add-vs-set semantics, and error handling that must not reuse another session.",
+    "noiseTier": "precise",
+    "filePatterns": ["lib/rack/session/dalli.rb"],
+    "patterns": [
+      {
+        "source": "sid\\.private_id",
+        "flags": "m",
+        "label": "session key derived from private id"
+      },
+      {
+        "source": "def (?:find|write|delete)_session",
+        "flags": "m",
+        "label": "session lifecycle hooks"
+      },
+      {
+        "source": "def memcached_key_from_sid\\(sid\\)",
+        "flags": "m",
+        "label": "session key mapper"
+      },
+      {
+        "source": "client\\.add\\(key, \\{\\}, @default_ttl\\)",
+        "flags": "m",
+        "label": "session insert must not overwrite"
+      },
+      {
+        "source": "dc\\.set\\(memcached_key_from_sid\\(sid\\), session, ttl\\(options\\[:expire_after\\]\\)\\)",
+        "flags": "m",
+        "label": "session write sink"
+      },
+      {
+        "source": "rescue ::Dalli::DalliError, Errno::ECONNREFUSED",
+        "flags": "m",
+        "label": "session error swallow"
+      }
+    ],
+    "examples": [
+      "        sid.private_id if sid.respond_to?(:private_id)",
+      "      def find_session(_req, sid)",
+      "      def write_session(_req, sid, session, options)",
+      "      def delete_session(_req, sid, options)",
+      "      def memcached_key_from_sid(sid)",
+      "          break sid if key && client.add(key, {}, @default_ttl)",
+      "          dc.set(memcached_key_from_sid(sid), session, ttl(options[:expire_after]))",
+      "      rescue ::Dalli::DalliError, Errno::ECONNREFUSED"
+    ],
+    "closesSurfaceIds": ["rack-session-store-keying"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-key-validation-chokepoint",
+    "description": "Key validation chokepoint: KeyManager#validate_key, the Client#perform call site, and KeyRegularizer base64/whitespace handling that keeps keys from injecting into command lines.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/key_manager.rb",
+      "lib/dalli/client.rb",
+      "lib/dalli/protocol/meta/key_regularizer.rb"
+    ],
+    "patterns": [
+      {
+        "source": "def validate_key\\(key\\)",
+        "flags": "m",
+        "label": "key validation entry point"
+      },
+      {
+        "source": "key = @key_manager\\.validate_key\\(key\\)",
+        "flags": "m",
+        "label": "client chokepoint validation"
+      },
+      {
+        "source": "key\\.length > MAX_KEY_LENGTH \\? truncated_key\\(key\\) : key",
+        "flags": "m",
+        "label": "length limit branch"
+      },
+      {
+        "source": "def self\\.encode\\(key\\)",
+        "flags": "m",
+        "label": "key regularizer encode"
+      },
+      {
+        "source": "WHITESPACE = /\\\\s/",
+        "flags": "m",
+        "label": "whitespace rejection rule"
+      }
+    ],
+    "examples": [
+      "    def validate_key(key)",
+      "      key = @key_manager.validate_key(key)",
+      "      key.length > MAX_KEY_LENGTH ? truncated_key(key) : key",
+      "        def self.encode(key)",
+      "        WHITESPACE = /\\s/"
+    ],
+    "closesSurfaceIds": ["key-validation-chokepoint"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-tls-credentials-and-tracing",
+    "description": "Transport and credential handling: opt-in TLS context wiring, SNI hostname, credential redaction for log/exception messages, URI and ENV credentials, and opaque tokens published as span attributes.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/socket.rb",
+      "lib/dalli/protocol/base.rb",
+      "lib/dalli/protocol/server_config_parser.rb",
+      "lib/dalli/opentelemetry_middleware.rb"
+    ],
+    "patterns": [
+      {
+        "source": "options\\[:ssl_context\\]",
+        "flags": "m",
+        "label": "TLS context wiring"
+      },
+      {
+        "source": "ssl_socket\\.hostname = host",
+        "flags": "m",
+        "label": "SNI hostname assignment"
+      },
+      {
+        "source": "FILTERED_OUT_OPTIONS",
+        "flags": "m",
+        "label": "credential redaction list"
+      },
+      {
+        "source": "logged_options",
+        "flags": "m",
+        "label": "redacted options in messages"
+      },
+      {
+        "source": "uri\\.password",
+        "flags": "m",
+        "label": "URI credential extraction"
+      },
+      {
+        "source": "ENV\\.fetch\\('MEMCACHE_(?:USERNAME|PASSWORD)', nil\\)",
+        "flags": "m",
+        "label": "environment credentials"
+      },
+      {
+        "source": "def record_request_opaque\\(opaque\\)",
+        "flags": "m",
+        "label": "opaque token into tracing"
+      },
+      {
+        "source": "span\\.add_attributes\\(",
+        "flags": "m",
+        "label": "span attribute emission"
+      }
+    ],
+    "examples": [
+      "          options[:ssl_context] ? wrapping_ssl_socket(sock, host, options[:ssl_context]) : sock",
+      "        ssl_socket.hostname = host",
+      "      FILTERED_OUT_OPTIONS = %i[username password].freeze",
+      "      def logged_options",
+      "          password: uri.password",
+      "        @options[:username] || ENV.fetch('MEMCACHE_USERNAME', nil)",
+      "        @options[:password] || ENV.fetch('MEMCACHE_PASSWORD', nil)",
+      "    def record_request_opaque(opaque)",
+      "        span.add_attributes(attributes)"
+    ],
+    "closesSurfaceIds": ["tls-credentials-and-tracing"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-pipelined-multi-key",
+    "description": "Pipelined multi-key get/set/delete: per-key validation, server grouping, request dispatch, response draining, abort and retry paths where a partial or timed-out pipeline can leave a socket mid-response and hand one key's value to another.",
+    "noiseTier": "precise",
+    "filePatterns": ["lib/dalli/pipelined_*.rb"],
+    "patterns": [
+      {
+        "source": "\\.request\\(:(?:read_multi_req|read_multi_with_status_req|pipelined_get|delete_multi_req|write_multi_storage_req)\\b",
+        "flags": "m",
+        "label": "pipelined request dispatched to a server"
+      },
+      {
+        "source": "@key_manager\\.validate_key\\(",
+        "flags": "m",
+        "label": "per-key validation before pipelining"
+      },
+      {
+        "source": "pipeline_(?:next_responses|response_setup|abort)\\b|pipeline_complete\\?",
+        "flags": "m",
+        "label": "pipeline response draining and abort"
+      },
+      {
+        "source": "^\\s*retry\\s*$",
+        "flags": "m",
+        "label": "retry after a failed pipeline"
+      },
+      {
+        "source": "IO\\.select\\(",
+        "flags": "m",
+        "label": "multi-server response reactor"
+      }
+    ],
+    "examples": [
+      "      results = @ring.servers.first.request(:read_multi_req, keys, req_options)",
+      "        server.request(:pipelined_get, keys_for_server, req_options)",
+      "      @ring.servers.first.request(:write_multi_storage_req, pairs, ttl, req_options)",
+      "      validated_keys = keys.map { |key| @key_manager.validate_key(key.to_s) }",
+      "      server.pipeline_next_responses.each_pair do |key, value_list|",
+      "    servers.each(&:pipeline_abort)",
+      "      retry",
+      "      readable, = IO.select(server_map.keys, nil, nil, timeout)"
+    ],
+    "closesSurfaceIds": ["pipelined-multi-key"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-ring-routing",
+    "description": "Consistent-hash ring routing: key-to-server selection, failover rehash that moves a key to another server, continuum hashing, shared socket locking and pipeline flush, and raw keys in log messages.",
+    "noiseTier": "precise",
+    "filePatterns": ["lib/dalli/ring.rb"],
+    "patterns": [
+      {
+        "source": "def (?:server_for_key|server_from_continuum|keys_grouped_by_server)\\b",
+        "flags": "m",
+        "label": "key-to-server routing"
+      },
+      {
+        "source": "hash_for\\(\"#\\{try\\}#\\{key\\}\"\\)|@failover = ",
+        "flags": "m",
+        "label": "failover rehash moves a key to another server"
+      },
+      {
+        "source": "Zlib\\.crc32\\(key\\)|Digest::SHA1\\.hexdigest\\(",
+        "flags": "m",
+        "label": "continuum hashing"
+      },
+      {
+        "source": "def (?:lock|pipeline_consume_and_ignore_responses|threadsafe!)",
+        "flags": "m",
+        "label": "shared socket locking and pipeline flush"
+      },
+      {
+        "source": "Dalli\\.logger\\.\\w+ \\{ \"[^\"]*#\\{key\\}",
+        "flags": "m",
+        "label": "raw key in log message"
+      }
+    ],
+    "examples": [
+      "    def server_for_key(key)",
+      "    def keys_grouped_by_server(key_arr)",
+      "        hkey = hash_for(\"#{try}#{key}\")",
+      "      @failover = options[:failover] != false",
+      "      Zlib.crc32(key)",
+      "          hash = Digest::SHA1.hexdigest(\"#{server.name}:#{idx}\")",
+      "    def pipeline_consume_and_ignore_responses",
+      "    def threadsafe!",
+      "        Dalli.logger.debug { \"unable to get key #{key}\" }"
+    ],
+    "closesSurfaceIds": ["ring-server-routing"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-server-config",
+    "description": "Server list sources: the servers argument, the MEMCACHE_SERVERS environment fallback and default target, comma-separated parsing, and the deprecated Dalli::Server alias to the protocol class.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/servers_arg_normalizer.rb",
+      "lib/dalli/server.rb"
+    ],
+    "patterns": [
+      {
+        "source": "ENV\\.fetch\\(ENV_VAR_NAME, nil\\)|ENV_VAR_NAME = 'MEMCACHE_SERVERS'",
+        "flags": "m",
+        "label": "server list from environment"
+      },
+      {
+        "source": "DEFAULT_SERVERS = ",
+        "flags": "m",
+        "label": "default server target"
+      },
+      {
+        "source": "\\.split\\(','\\)",
+        "flags": "m",
+        "label": "comma-separated server list"
+      },
+      {
+        "source": "Server = Protocol::Meta",
+        "flags": "m",
+        "label": "deprecated Server alias to the protocol class"
+      }
+    ],
+    "examples": [
+      "    ENV_VAR_NAME = 'MEMCACHE_SERVERS'",
+      "      ENV.fetch(ENV_VAR_NAME, nil) || DEFAULT_SERVERS",
+      "    DEFAULT_SERVERS = ['127.0.0.1:11211'].freeze",
+      "      Array(arg).flat_map { |s| s.split(',') }.reject(&:empty?)",
+      "  Server = Protocol::Meta"
+    ],
+    "closesSurfaceIds": ["server-config"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-stale-read-result",
+    "description": "Stale-aware read results: CacheResult hit/stale/miss predicates, where a stale tombstone counts as a hit, and the protocol code that builds them from server tokens, so a caller can serve invalidated data as fresh.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/cache_result.rb",
+      "lib/dalli/protocol/meta.rb",
+      "lib/dalli/protocol/meta/response_processor.rb"
+    ],
+    "patterns": [
+      {
+        "source": "def (?:hit|stale|miss)\\?",
+        "flags": "m",
+        "label": "read result predicates"
+      },
+      {
+        "source": "!@miss",
+        "flags": "m",
+        "label": "stale tombstones count as hits"
+      },
+      {
+        "source": "CacheResult\\.new\\(",
+        "flags": "m",
+        "label": "stale-aware result construction"
+      },
+      {
+        "source": "stale_from_tokens\\(",
+        "flags": "m",
+        "label": "stale flag parsed from server tokens"
+      }
+    ],
+    "examples": [
+      "    def hit?",
+      "      !@miss",
+      "            results[key] = ::Dalli::CacheResult.new(value: nil, miss: true) unless results.key?(key)",
+      "            [::Dalli::CacheResult.new(value: value, stale: stale_from_tokens(tokens)), raw_value.bytesize]"
+    ],
+    "closesSurfaceIds": ["stale-read-result"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-ttl-sanitization",
+    "description": "TTL handling: TtlSanitizer's integer coercion and 30-day interval/timestamp conversion, its call sites, and the T<ttl> tokens interpolated into meta commands, which decide cache and Rack session lifetime and keep caller TTLs from adding tokens to the command line.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/protocol/ttl_sanitizer.rb",
+      "lib/dalli/protocol/meta.rb",
+      "lib/dalli/protocol/base.rb",
+      "lib/dalli/protocol/meta/request_formatter.rb"
+    ],
+    "patterns": [
+      {
+        "source": "def self\\.(?:sanitize|as_timestamp)\\(",
+        "flags": "m",
+        "label": "TTL sanitizer entry points"
+      },
+      {
+        "source": "ttl\\.to_i|MAX_ACCEPTABLE_EXPIRATION_INTERVAL =",
+        "flags": "m",
+        "label": "integer coercion and 30-day interval limit"
+      },
+      {
+        "source": "TtlSanitizer\\.sanitize\\(",
+        "flags": "m",
+        "label": "TTL sanitized before a command is built"
+      },
+      {
+        "source": " T#\\{",
+        "flags": "m",
+        "label": "TTL token interpolated into a meta command"
+      }
+    ],
+    "examples": [
+      "      def self.sanitize(ttl)",
+      "      def self.as_timestamp(ttl_as_i)",
+      "        ttl_as_i = ttl.to_i",
+      "      MAX_ACCEPTABLE_EXPIRATION_INTERVAL = 30 * 24 * 60 * 60 # 30 days",
+      "        ttl = TtlSanitizer.sanitize(ttl) if ttl",
+      "          cmd << \" T#{ttl}\" if ttl",
+      "              \"ms #{encoded_key} #{value_bytesize} c F#{bitflags} T#{ttl} MS q#{routing_suffix}\\r\\n\""
+    ],
+    "closesSurfaceIds": ["ttl-sanitization"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-threadsafe-socket-lock",
+    "description": "Per-server socket locking: Dalli::Threadsafe's Monitor around request, alive?, close and the pipeline methods, the threadsafe: false opt-out, the ring-wide lock for pipelines, and the rule that every public socket method must be wrapped. A missing lock lets two threads interleave on one connection and read each other's responses.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/options.rb",
+      "lib/dalli/ring.rb",
+      "lib/dalli/protocol/base.rb"
+    ],
+    "patterns": [
+      {
+        "source": "module Threadsafe|@lock\\.synchronize do",
+        "flags": "m",
+        "label": "per-server socket lock"
+      },
+      {
+        "source": "def (?:lock!|unlock!|init_threadsafe)",
+        "flags": "m",
+        "label": "lock entry points"
+      },
+      {
+        "source": "threadsafe! unless options\\[:threadsafe\\] == false|s\\.extend\\(Dalli::Threadsafe\\)",
+        "flags": "m",
+        "label": "threadsafe opt-out and lock installation"
+      },
+      {
+        "source": "@servers\\.each\\(&:(?:lock!|unlock!)\\)",
+        "flags": "m",
+        "label": "ring-wide lock held for a pipeline"
+      },
+      {
+        "source": "overridden in Dalli::Threadsafe",
+        "flags": "m",
+        "label": "public socket methods must be wrapped by Threadsafe"
+      }
+    ],
+    "examples": [
+      "  module Threadsafe",
+      "      @lock.synchronize do",
+      "    def lock!",
+      "      def unlock!; end",
+      "    def init_threadsafe",
+      "      threadsafe! unless options[:threadsafe] == false",
+      "        s.extend(Dalli::Threadsafe)",
+      "      @servers.each(&:lock!)",
+      "      # NOTE: Additional public methods should be overridden in Dalli::Threadsafe"
+    ],
+    "closesSurfaceIds": ["threadsafe-socket-lock"]
+  },
+  {
+    "version": 1,
+    "slug": "dalli-fork-safety",
+    "description": "Fork safety: PIDCache's Process._fork hook that refreshes the process id in the child, and the connection manager's fork detection that reconnects instead of sharing the parent's socket. If detection breaks, parent and child read each other's responses on one socket.",
+    "noiseTier": "precise",
+    "filePatterns": [
+      "lib/dalli/pid_cache.rb",
+      "lib/dalli/protocol/connection_manager.rb"
+    ],
+    "patterns": [
+      {
+        "source": "def _fork|Process\\.singleton_class\\.prepend\\(CoreExt\\)",
+        "flags": "m",
+        "label": "fork hook patched into Process"
+      },
+      {
+        "source": "PIDCache\\.(?:update!|pid)",
+        "flags": "m",
+        "label": "process id recorded and compared"
+      },
+      {
+        "source": "def (?:fork_detected\\?|reconnect_on_fork)|reconnect_on_fork if fork_detected\\?",
+        "flags": "m",
+        "label": "reconnect after fork"
+      },
+      {
+        "source": "shutdown unless fork_detected\\?",
+        "flags": "m",
+        "label": "parent socket left open after fork"
+      }
+    ],
+    "examples": [
+      "        def _fork",
+      "      Process.singleton_class.prepend(CoreExt)",
+      "          PIDCache.update! if child_pid.zero?",
+      "        @pid = PIDCache.pid",
+      "      def fork_detected?",
+      "      def reconnect_on_fork",
+      "        reconnect_on_fork if fork_detected?",
+      "            @sock.to_io.shutdown unless fork_detected?"
+    ],
+    "closesSurfaceIds": ["fork-safety"]
+  }
+]
